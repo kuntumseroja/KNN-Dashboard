@@ -1,0 +1,111 @@
+[14:03:08] 📦 Processing dependencies...
+
+Prepared [2025-12-08 14:03:17.904963] 45 packages in 8.66s
+
+Installed 45 packages in 1.86s
+
+ + altair==6.0.0
+
+ + attrs==25.4.0
+
+ + blinker==1.9.0
+
+ + cachetools==6.2.2
+
+ + certifi==2025.11.12
+
+ + charset-normalizer==3.4.4
+
+ + click==8.3.1
+
+ + et-xmlfile==2.0.0
+
+ + gitdb==4.0.12
+
+ +[2025-12-08 14:03:19.759152]  gitpython==3.1.45
+
+ + idna==3.11
+
+ + jinja2==3.1.6
+
+ + [2025-12-08 14:03:19.759498] joblib==1.5.2
+
+ + jsonschema==4.25.1
+
+ + jsonschema-specifications==2025.9.1
+
+ + markupsafe==[2025-12-08 14:03:19.759917] 3.0.3
+
+ + narwhals==2.13.0
+
+ + networkx==3.6[2025-12-08 14:03:19.760234] 
+
+ + numpy==2.3.5
+
+ + openpyxl==3.1.5
+
+ [2025-12-08 14:03:19.760628] + packaging==25.0
+
+ + pandas==2.3.3
+
+ +[2025-12-08 14:03:19.760971]  pillow==12.0.0
+
+ + plotly==6.5.0
+
+ +[2025-12-08 14:03:19.761240]  protobuf==6.33.2
+
+ + pyarrow==22.0.0
+
+ + [2025-12-08 14:03:19.761476] pydeck==0.9.1
+
+ + python-dateutil==2.9.0.post0
+
+ + pytz[2025-12-08 14:03:19.761702] ==2025.2
+
+ + referencing==0.37.0
+
+ + requests[2025-12-08 14:03:19.761967] ==2.32.5
+
+ + rpds-py==0.30.0
+
+ + scikit-learn==[2025-12-08 14:03:19.762171] 1.7.2
+
+ + scipy==1.16.3
+
+ + six==[2025-12-08 14:03:19.762419] 1.17.0
+
+ + smmap==5.0.2
+
+ + streamlit==1.52.1
+
+ [2025-12-08 14:03:19.762583] + tenacity==9.1.2
+
+ + threadpoolctl==3.6.0
+
+ +[2025-12-08 14:03:19.762720]  toml==0.10.2
+
+ + tornado==6.5.2
+
+ + typing-extensions==4.15.0
+
+ + tzdata[2025-12-08 14:03:19.762871] ==2025.2
+
+ + urllib3==2.6.0
+
+ + watchdog==[2025-12-08 14:03:19.763001] 6.0.0
+
+[14:03:20] 🐍 Python dependencies were installed from /mount/src/knn-dashboard/uv.lock using uv-sync.
+
+[14:03:20] 📦 WARN: More than one requirements file detected in the repository. Available options: uv-sync /mount/src/knn-dashboard/uv.lock, poetry /mount/src/knn-dashboard/pyproject.toml. Used: uv-sync with /mount/src/knn-dashboard/uv.lock
+
+Check if streamlit is installed
+
+Streamlit is already installed
+
+[14:03:21] 📦 Processed dependencies!
+
+
+
+
+[14:03:25] ❗️ The service has encountered an error while checking the health of the Streamlit app: Get "http://localhost:8501/healthz": dial tcp 127.0.0.1:8501: connect: connection refused
+
