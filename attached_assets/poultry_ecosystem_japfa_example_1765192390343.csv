@@ -1,0 +1,13 @@
+account_id,legal_name,ecosystem_role,anchor_group,anchor_level,segment_code,primary_bank,bri_status,ntb_status,avg_txn_amount_30d,txn_count_30d,turnover_90d,cash_withdrawal_ratio_90d,merchant_diversity_90d,unique_devices_90d,unique_ips_90d,country_risk_score,channel_mix_online_ratio,lead_score_bri
+ACC_JAPFA_01,Japfa Comfeed Indonesia Tbk,Anchor_Corporate,Japfa_Group,0,Corporate,BRI,Existing,NTB,950000000,420,8500000000,0.12,45,8,15,0.1,0.35,98
+ACC_JAPFA_02,Japfa Regional Feed Mill Jawa Barat,Feed_Mill,Japfa_Group,0,Corporate,BRI,Existing,NTB,550000000,310,4200000000,0.18,38,6,11,0.1,0.4,95
+ACC_FARM_01,CV Sumber Ayam Sejahtera,Breeder_Farm,Japfa_Group,1,SME,BRI,Existing,NTB,85000000,160,650000000,0.22,24,4,7,0.15,0.55,88
+ACC_FARM_02,PT Mitra Unggas Mandiri,Contract_Farmer,Japfa_Group,1,SME,Other,NTB,Existing,62000000,130,480000000,0.28,19,3,6,0.18,0.48,76
+ACC_FARM_03,UD Ayam Makmur,Contract_Farmer,Japfa_Group,1,Micro,BRI,Existing,NTB,18000000,95,130000000,0.35,12,3,5,0.2,0.7,82
+ACC_COLL_01,PT Sentra Livebird Nusantara,Collector/Offtaker,Japfa_Group,1,SME,BRI,Existing,NTB,120000000,140,900000000,0.25,21,4,6,0.14,0.42,91
+ACC_SLAUGH_01,PT RPH Ayam Sehat,Slaughterhouse,Japfa_Group,1,SME,NTB,NTB,Existing,210000000,175,1450000000,0.2,28,5,8,0.12,0.5,79
+ACC_RETAIL_01,Toko Ayam & Telur Berkah,Retailer/Warung,Independent,2,Micro,BRI,Existing,NTB,7500000,85,52000000,0.4,15,2,4,0.22,0.8,73
+ACC_RETAIL_02,Pasar Modern Poultry Stand 17,Retailer/Warung,Independent,2,Micro,Other,NTB,NTB,6200000,70,39000000,0.38,13,2,3,0.25,0.78,65
+ACC_LOG_01,CV Armada Dingin Nusantara,Logistics/Transport,Japfa_Group,1,SME,BRI,Existing,NTB,56000000,90,420000000,0.18,18,4,6,0.16,0.6,84
+ACC_VET_01,Apotek Hewan Sehat,Input_Supplier,Independent,2,SME,NTB,NTB,Existing,43000000,75,310000000,0.3,20,3,5,0.18,0.52,71
+ACC_FARM_04,Koperasi Peternak Ayam Lombok,Contract_Farmer,Japfa_Group,2,SME,NTB,NTB,Existing,27000000,65,210000000,0.32,17,3,4,0.2,0.65,77

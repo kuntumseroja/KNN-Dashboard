@@ -1,16 +1,17 @@
-# KNN Banking Account Relationship Dashboard
+# OBS Account Relationship Dashboard
 
 ## Overview
-An interactive Streamlit dashboard that demonstrates K-Nearest Neighbors (KNN) algorithm for detecting behavioral relationships between banking accounts. The application identifies implicit connections between accounts based on transaction patterns, device usage, and behavioral features.
+An interactive Streamlit dashboard for Relationship Managers (RM) that discovers behavioral relationships between accounts in the poultry supply chain ecosystem using K-Nearest Neighbors (KNN) algorithm. The dashboard focuses on the JAPFA anchor group and related ecosystem players, helping RMs identify opportunities and understand account networks.
 
 ## Current State
-- Fully functional application with mock banking data generation
-- CSV/Excel file upload support for custom datasets
+- Fully functional dashboard customized for poultry ecosystem
+- Poultry-specific mock data generator with realistic supply chain roles
 - KNN-based similarity detection with configurable parameters
-- Interactive network graph visualization
-- Multiple clustering algorithms (Louvain and DBSCAN)
-- Fraud risk scoring system
-- Export functionality for data and analysis results
+- Interactive network visualization with ecosystem role color coding
+- RM Opportunity scoring system (replaces fraud risk scoring)
+- Community detection using Louvain and DBSCAN algorithms
+- CSV/Excel upload support for custom datasets
+- Export functionality for accounts, relationships, and opportunities
 
 ## Project Architecture
 
@@ -18,61 +19,74 @@ An interactive Streamlit dashboard that demonstrates K-Nearest Neighbors (KNN) a
 - `app.py` - Main Streamlit application with all dashboard components
 - `.streamlit/config.toml` - Streamlit server configuration
 
-### Key Features
+### Poultry Ecosystem Model
 
-1. **Data Sources**:
-   - Mock data generation with realistic banking account features
-   - CSV/Excel file upload with validation
-   - Downloadable template for custom data
+#### Ecosystem Roles
+- **Anchor_Corporate** - Large corporate anchors (e.g., Japfa Comfeed, Charoen Pokphand)
+- **Feed_Mill** - Regional feed production facilities
+- **Breeder_Farm** - Parent stock and breeding operations
+- **Contract_Farmer** - Partner farms under anchor contracts
+- **Collector/Offtaker** - Livebird aggregators and buyers
+- **Slaughterhouse** - Processing facilities (RPH)
+- **Retailer/Warung** - End retail and traditional markets
+- **Logistics/Transport** - Cold chain and transportation
+- **Input_Supplier** - Veterinary, feed additives, equipment
 
-2. **KNN Similarity Engine**: 
-   - Uses scikit-learn's NearestNeighbors with preprocessing pipeline
-   - StandardScaler for numeric features
-   - OneHotEncoder for categorical features
-   - Configurable K neighbors and distance threshold
+#### Anchor Groups
+- Japfa_Group
+- CP_Group
+- Charoen_Group
+- Malindo_Group
+- Independent
 
-3. **Network Visualization**: 
-   - Interactive Plotly graph showing account relationships
-   - Color-coded by community or risk score
-   - Node size based on connection count
-   - Hover details with account metrics
-
-4. **Clustering Algorithms**: 
-   - Louvain: Graph-based community detection
-   - DBSCAN: Density-based clustering in feature space
-   - Side-by-side comparison view
-
-5. **Fraud Risk Scoring**:
-   - Hub score (network centrality)
-   - Bridge score (betweenness centrality)
-   - Cluster score (community size)
-   - Behavioral score (cash withdrawals, country risk, device diversity)
-   - Risk levels: High, Medium, Low
-
-6. **Export Functionality**:
-   - Export accounts data as CSV
-   - Export relationships as CSV
-   - Export risk scores as CSV
-
-### Dashboard Tabs
-1. **Network Overview**: Graph visualization, metrics, hub accounts
-2. **Account Lookup**: Individual account details, neighbors, explanations
-3. **Community Analysis**: Community statistics, segment distribution
-4. **Fraud Risk Analysis**: Risk metrics, distributions, high-risk accounts
-5. **Clustering Comparison**: Louvain vs DBSCAN comparison
-6. **Data Explorer**: Raw data tables, correlations, exports
-
-### Account Features Used
+#### Account Features
+- account_id - Unique account identifier
+- legal_name - Company/business legal name
+- ecosystem_role - Role in poultry supply chain
+- anchor_group - Parent anchor affiliation
+- anchor_level - Distance from anchor (0=anchor, 1=direct, 2=indirect)
+- segment_code - Corporate/SME/Micro
+- primary_bank - Current primary bank
+- bri_status - BRI banking status (Existing/NTB)
+- ntb_status - New-to-Bank status
 - avg_txn_amount_30d - Average transaction amount (30 days)
 - txn_count_30d - Transaction count (30 days)
-- salary_inflow_90d - Salary inflow (90 days)
-- cash_withdrawal_ratio_90d - Cash withdrawal ratio (90 days)
-- merchant_diversity_90d - Merchant diversity (90 days)
-- unique_devices_90d - Unique devices (90 days)
-- unique_ips_90d - Unique IPs (90 days)
-- country_risk_score - Country risk score
-- channel_mix_online_ratio - Online channel usage ratio
-- segment_code - Account segment (Retail/SME/Corporate)
+- turnover_90d - Total turnover (90 days)
+- cash_withdrawal_ratio_90d - Cash withdrawal ratio
+- merchant_diversity_90d - Number of unique merchants
+- unique_devices_90d - Device fingerprint diversity
+- unique_ips_90d - IP address diversity
+- country_risk_score - Geographic risk indicator
+- channel_mix_online_ratio - Digital channel usage
+- lead_score_bri - BRI lead scoring (0-100)
+
+### Dashboard Tabs
+
+1. **Ecosystem Overview**: Network visualization, composition charts, hub accounts
+2. **Account Details**: Individual account lookup with connected accounts and opportunity scores
+3. **Anchor Analysis**: Anchor group statistics, turnover analysis, supply chain sunburst
+4. **RM Opportunities**: Priority pipeline, NTB targets, opportunity scoring methodology
+5. **Cluster Analysis**: Louvain vs DBSCAN comparison, community exploration
+6. **Data Export**: Download datasets, view correlations
+
+### Opportunity Scoring System
+The opportunity score (0-100) is calculated based on:
+- **Network Score (20%)**: Account connectivity in the ecosystem network
+- **Influence Score (15%)**: Betweenness centrality (bridging communities)
+- **Ecosystem Score (15%)**: Community size and strength
+- **Lead Score (25%)**: BRI lead scoring based on financial behavior
+- **Potential Score (25%)**: NTB status bonus and anchor proximity
+
+Priority levels:
+- High: Score >= 70
+- Medium: Score >= 45
+- Low: Score < 45
+
+### Key Technologies
+- **KNN Engine**: scikit-learn NearestNeighbors with preprocessing pipeline
+- **Network Analysis**: NetworkX for graph operations and community detection
+- **Visualization**: Plotly for interactive charts and network graphs
+- **Clustering**: Louvain (graph-based) and DBSCAN (density-based)
 
 ### Dependencies
 - streamlit
@@ -81,11 +95,18 @@ An interactive Streamlit dashboard that demonstrates K-Nearest Neighbors (KNN) a
 - scikit-learn
 - networkx
 - plotly
-- openpyxl (for Excel file support)
+- openpyxl (Excel support)
 
 ## Recent Changes
-- December 2025: Added CSV/Excel upload, DBSCAN clustering, fraud risk scoring, exports
-- December 2025: Initial MVP created with KNN, Louvain, network visualization
+- December 2025: Rebranded to "OBS Account Relationship Dashboard"
+- December 2025: Implemented poultry ecosystem data model with JAPFA as anchor
+- December 2025: Modernized UI for Relationship Manager focus
+- December 2025: Added RM Opportunity scoring replacing fraud risk scoring
+- December 2025: Added Anchor Analysis and ecosystem role visualization
+- December 2025: Initial MVP with KNN, community detection, network visualization
 
 ## User Preferences
-- None specified yet
+- Dashboard focused on RM use case for banking opportunities
+- Poultry supply chain ecosystem context
+- Indonesian business naming conventions (PT, CV, UD, Koperasi)
+- Currency display in Rupiah (Rp) with B/M/K abbreviations
