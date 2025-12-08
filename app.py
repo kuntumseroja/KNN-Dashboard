@@ -5,9 +5,11 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.neighbors import NearestNeighbors
+from sklearn.cluster import DBSCAN
 import networkx as nx
 import plotly.graph_objects as go
 import plotly.express as px
+import io
 
 
 st.set_page_config(
@@ -15,6 +17,21 @@ st.set_page_config(
     page_icon="🏦",
     layout="wide"
 )
+
+
+NUMERIC_FEATURES = [
+    "avg_txn_amount_30d",
+    "txn_count_30d",
+    "salary_inflow_90d",
+    "cash_withdrawal_ratio_90d",
+    "merchant_diversity_90d",
+    "unique_devices_90d",
+    "unique_ips_90d",
+    "country_risk_score",
+    "channel_mix_online_ratio",
+]
+
+CATEGORICAL_FEATURES = ["segment_code"]
 
 
 @st.cache_data
@@ -56,23 +73,34 @@ def generate_mock_data(n_accounts=100, seed=42):
     return pd.DataFrame(data)
 
 
-NUMERIC_FEATURES = [
-    "avg_txn_amount_30d",
-    "txn_count_30d",
-    "salary_inflow_90d",
-    "cash_withdrawal_ratio_90d",
-    "merchant_diversity_90d",
-    "unique_devices_90d",
-    "unique_ips_90d",
-    "country_risk_score",
-    "channel_mix_online_ratio",
-]
+def validate_uploaded_data(df):
+    required_cols = ["account_id"] + NUMERIC_FEATURES + CATEGORICAL_FEATURES
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        return False, f"Missing required columns: {', '.join(missing_cols)}"
+    
+    for col in NUMERIC_FEATURES:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        null_count = df[col].isna().sum()
+        if null_count > 0:
+            return False, f"Column '{col}' has {null_count} invalid/missing values that could not be converted to numbers"
+    
+    if df["account_id"].isna().any():
+        return False, "Account ID column contains empty values"
+    
+    if df["account_id"].duplicated().any():
+        return False, "Duplicate account IDs found"
+    
+    if len(df) < 3:
+        return False, "Dataset must contain at least 3 accounts"
+    
+    return True, df
 
-CATEGORICAL_FEATURES = ["segment_code"]
 
-
-@st.cache_resource
-def build_knn_pipeline(_df, n_neighbors=6):
+def build_knn_pipeline(df, n_neighbors=6):
     numeric_transformer = StandardScaler()
     categorical_transformer = OneHotEncoder(handle_unknown="ignore")
     
@@ -84,7 +112,7 @@ def build_knn_pipeline(_df, n_neighbors=6):
     )
     
     knn = NearestNeighbors(
-        n_neighbors=n_neighbors,
+        n_neighbors=min(n_neighbors, len(df)),
         metric="euclidean"
     )
     
@@ -93,7 +121,7 @@ def build_knn_pipeline(_df, n_neighbors=6):
         ("knn", knn)
     ])
     
-    X = _df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+    X = df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
     pipeline.fit(X)
     
     return pipeline
@@ -136,15 +164,16 @@ def build_graph(df, edges_df):
     G = nx.Graph()
     G.add_nodes_from(df["account_id"].values)
     
-    for _, row in edges_df.iterrows():
-        G.add_edge(row["src"], row["dst"], 
-                   distance=row["distance"], 
-                   similarity=row["similarity"])
+    if len(edges_df) > 0:
+        for _, row in edges_df.iterrows():
+            G.add_edge(row["src"], row["dst"], 
+                       distance=row["distance"], 
+                       similarity=row["similarity"])
     
     return G
 
 
-def detect_communities(G):
+def detect_communities_louvain(G):
     if len(G.edges()) == 0:
         return {node: 0 for node in G.nodes()}
     
@@ -156,7 +185,73 @@ def detect_communities(G):
     return community_map
 
 
-def create_network_visualization(G, df, community_map, selected_account=None):
+def detect_communities_dbscan(df, eps=0.5, min_samples=3):
+    numeric_transformer = StandardScaler()
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+    
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, NUMERIC_FEATURES),
+            ("cat", categorical_transformer, CATEGORICAL_FEATURES),
+        ]
+    )
+    
+    X = df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+    X_processed = preprocessor.fit_transform(X)
+    
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    labels = dbscan.fit_predict(X_processed)
+    
+    community_map = {}
+    for i, account_id in enumerate(df["account_id"].values):
+        community_map[account_id] = int(labels[i])
+    
+    return community_map
+
+
+def calculate_fraud_risk_score(G, df, community_map):
+    if len(G.nodes()) == 0:
+        return {}
+    
+    degree_centrality = nx.degree_centrality(G) if len(G.edges()) > 0 else {n: 0 for n in G.nodes()}
+    betweenness_centrality = nx.betweenness_centrality(G) if len(G.edges()) > 0 else {n: 0 for n in G.nodes()}
+    
+    community_sizes = {}
+    for node, comm in community_map.items():
+        community_sizes[comm] = community_sizes.get(comm, 0) + 1
+    
+    risk_scores = {}
+    
+    for account_id in df["account_id"].values:
+        account_data = df[df["account_id"] == account_id].iloc[0]
+        
+        hub_score = degree_centrality.get(account_id, 0) * 25
+        bridge_score = betweenness_centrality.get(account_id, 0) * 25
+        
+        community = community_map.get(account_id, 0)
+        community_size = community_sizes.get(community, 1)
+        cluster_score = min(community_size / 10, 1) * 15
+        
+        behavioral_score = 0
+        behavioral_score += min(account_data["cash_withdrawal_ratio_90d"] * 10, 10)
+        behavioral_score += min(account_data["country_risk_score"] * 10, 10)
+        behavioral_score += min(account_data["unique_devices_90d"] / 5, 1) * 5
+        behavioral_score += min(account_data["unique_ips_90d"] / 15, 1) * 5
+        
+        total_risk = hub_score + bridge_score + cluster_score + behavioral_score
+        risk_scores[account_id] = {
+            "total_risk": min(total_risk, 100),
+            "hub_score": hub_score,
+            "bridge_score": bridge_score,
+            "cluster_score": cluster_score,
+            "behavioral_score": behavioral_score,
+            "risk_level": "High" if total_risk >= 60 else "Medium" if total_risk >= 30 else "Low"
+        }
+    
+    return risk_scores
+
+
+def create_network_visualization(G, df, community_map, selected_account=None, risk_scores=None):
     if len(G.nodes()) == 0:
         return go.Figure()
     
@@ -164,15 +259,12 @@ def create_network_visualization(G, df, community_map, selected_account=None):
     
     edge_x = []
     edge_y = []
-    edge_colors = []
     
     for edge in G.edges(data=True):
         x0, y0 = pos[edge[0]]
         x1, y1 = pos[edge[1]]
         edge_x.extend([x0, x1, None])
         edge_y.extend([y0, y1, None])
-        similarity = edge[2].get("similarity", 0.5)
-        edge_colors.append(similarity)
     
     edge_trace = go.Scatter(
         x=edge_x, y=edge_y,
@@ -194,8 +286,12 @@ def create_network_visualization(G, df, community_map, selected_account=None):
         node_x.append(x)
         node_y.append(y)
         
-        community_id = community_map.get(node, 0)
-        node_colors.append(community_id)
+        if risk_scores:
+            risk = risk_scores.get(node, {}).get("total_risk", 0)
+            node_colors.append(risk)
+        else:
+            community_id = community_map.get(node, 0)
+            node_colors.append(community_id)
         
         degree = G.degree(node)
         node_sizes.append(10 + degree * 3)
@@ -207,10 +303,17 @@ def create_network_visualization(G, df, community_map, selected_account=None):
             text += f"Avg Txn: ${account_data['avg_txn_amount_30d']:.2f}<br>"
             text += f"Connections: {degree}<br>"
             text += f"Centrality: {centrality.get(node, 0):.3f}<br>"
-            text += f"Community: {community_id}"
+            text += f"Community: {community_map.get(node, 0)}"
+            if risk_scores:
+                risk_info = risk_scores.get(node, {})
+                text += f"<br>Risk Score: {risk_info.get('total_risk', 0):.1f}"
+                text += f"<br>Risk Level: {risk_info.get('risk_level', 'Unknown')}"
         else:
             text = node
         node_text.append(text)
+    
+    colorbar_title = "Risk Score" if risk_scores else "Community"
+    colorscale = "RdYlGn_r" if risk_scores else "Viridis"
     
     node_trace = go.Scatter(
         x=node_x, y=node_y,
@@ -219,12 +322,12 @@ def create_network_visualization(G, df, community_map, selected_account=None):
         text=node_text,
         marker=dict(
             showscale=True,
-            colorscale="Viridis",
+            colorscale=colorscale,
             color=node_colors,
             size=node_sizes,
             colorbar=dict(
                 thickness=15,
-                title=dict(text="Community", side="right"),
+                title=dict(text=colorbar_title, side="right"),
                 xanchor="left"
             ),
             line=dict(width=2, color="white")
@@ -281,16 +384,71 @@ def get_account_neighbors(G, account_id, df):
     return pd.DataFrame(neighbor_data).sort_values("similarity", ascending=False)
 
 
+def export_to_csv(df, filename="export.csv"):
+    return df.to_csv(index=False).encode('utf-8')
+
+
 def main():
     st.title("KNN Banking Account Relationship Dashboard")
     st.markdown("Discover behavioral relationships between accounts using K-Nearest Neighbors algorithm")
     
+    if "uploaded_data" not in st.session_state:
+        st.session_state.uploaded_data = None
+    
     with st.sidebar:
         st.header("Configuration")
         
-        n_accounts = st.slider("Number of Accounts", min_value=50, max_value=500, value=100, step=50)
+        st.subheader("Data Source")
+        data_source = st.radio("Select data source:", ["Generate Mock Data", "Upload CSV/Excel"])
+        
+        if data_source == "Upload CSV/Excel":
+            uploaded_file = st.file_uploader("Upload account data", type=["csv", "xlsx"])
+            
+            if uploaded_file is not None:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df_uploaded = pd.read_csv(uploaded_file)
+                    else:
+                        df_uploaded = pd.read_excel(uploaded_file)
+                    
+                    valid, result = validate_uploaded_data(df_uploaded)
+                    if valid:
+                        st.session_state.uploaded_data = result
+                        st.success(f"Loaded {len(result)} accounts")
+                    else:
+                        st.error(result)
+                        st.session_state.uploaded_data = None
+                except Exception as e:
+                    st.error(f"Error reading file: {str(e)}")
+                    st.session_state.uploaded_data = None
+            
+            with st.expander("Required columns"):
+                st.markdown("**Required columns:**")
+                st.code("account_id, " + ", ".join(NUMERIC_FEATURES) + ", segment_code")
+                st.markdown("**Download sample template:**")
+                sample_df = generate_mock_data(n_accounts=10)
+                st.download_button(
+                    "Download Template",
+                    export_to_csv(sample_df),
+                    "account_template.csv",
+                    "text/csv"
+                )
+        
+        st.markdown("---")
+        
+        if data_source == "Generate Mock Data":
+            n_accounts = st.slider("Number of Accounts", min_value=50, max_value=500, value=100, step=50)
+        
         n_neighbors = st.slider("K Neighbors", min_value=3, max_value=15, value=6)
         max_distance = st.slider("Max Distance Threshold", min_value=0.5, max_value=5.0, value=2.0, step=0.1)
+        
+        st.markdown("---")
+        st.subheader("Clustering Algorithm")
+        clustering_method = st.selectbox("Method", ["Louvain", "DBSCAN"])
+        
+        if clustering_method == "DBSCAN":
+            dbscan_eps = st.slider("DBSCAN eps", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
+            dbscan_min_samples = st.slider("DBSCAN min_samples", min_value=2, max_value=10, value=3)
         
         st.markdown("---")
         st.markdown("### Feature Weights")
@@ -299,15 +457,30 @@ def main():
             st.caption(f"• {feat.replace('_', ' ').title()}")
         st.caption("... and more")
     
-    df = generate_mock_data(n_accounts=n_accounts)
+    if data_source == "Upload CSV/Excel" and st.session_state.uploaded_data is not None:
+        df = st.session_state.uploaded_data.copy()
+    else:
+        df = generate_mock_data(n_accounts=n_accounts if data_source == "Generate Mock Data" else 100)
+    
     pipeline = build_knn_pipeline(df, n_neighbors=n_neighbors)
     edges_df = find_neighbors_and_edges(df, pipeline, max_distance=max_distance)
     G = build_graph(df, edges_df)
-    community_map = detect_communities(G)
+    
+    if clustering_method == "Louvain":
+        community_map = detect_communities_louvain(G)
+    else:
+        community_map = detect_communities_dbscan(df, eps=dbscan_eps, min_samples=dbscan_min_samples)
     
     df["community"] = df["account_id"].map(community_map)
     
-    tab1, tab2, tab3, tab4 = st.tabs(["Network Overview", "Account Lookup", "Community Analysis", "Data Explorer"])
+    risk_scores = calculate_fraud_risk_score(G, df, community_map)
+    df["fraud_risk_score"] = df["account_id"].map(lambda x: risk_scores.get(x, {}).get("total_risk", 0))
+    df["risk_level"] = df["account_id"].map(lambda x: risk_scores.get(x, {}).get("risk_level", "Unknown"))
+    
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Network Overview", "Account Lookup", "Community Analysis", 
+        "Fraud Risk Analysis", "Clustering Comparison", "Data Explorer"
+    ])
     
     with tab1:
         st.subheader("Account Relationship Network")
@@ -323,8 +496,9 @@ def main():
             avg_connections = len(edges_df) * 2 / len(df) if len(df) > 0 else 0
             st.metric("Avg Connections", f"{avg_connections:.1f}")
         
-        fig = create_network_visualization(G, df, community_map)
-        st.plotly_chart(fig, width="stretch")
+        show_risk = st.checkbox("Color by Risk Score", value=False)
+        fig = create_network_visualization(G, df, community_map, risk_scores=risk_scores if show_risk else None)
+        st.plotly_chart(fig, use_container_width=True)
         
         st.subheader("Network Statistics")
         col1, col2 = st.columns(2)
@@ -336,15 +510,14 @@ def main():
                 hub_df = pd.DataFrame(top_hubs, columns=["Account", "Centrality"])
                 hub_df["Centrality"] = hub_df["Centrality"].round(4)
                 st.markdown("**Top Hub Accounts** (potential mule accounts)")
-                st.dataframe(hub_df, width="stretch", hide_index=True)
+                st.dataframe(hub_df, use_container_width=True, hide_index=True)
         
         with col2:
             if len(edges_df) > 0:
-                similarity_dist = edges_df["similarity"].describe()
                 st.markdown("**Similarity Score Distribution**")
                 fig_hist = px.histogram(edges_df, x="similarity", nbins=30, 
                                        title="Distribution of Similarity Scores")
-                st.plotly_chart(fig_hist, width="stretch")
+                st.plotly_chart(fig_hist, use_container_width=True)
     
     with tab2:
         st.subheader("Account Lookup")
@@ -361,6 +534,12 @@ def main():
                 st.markdown(f"**Account ID:** {selected_account}")
                 st.markdown(f"**Segment:** {account_data['segment_code']}")
                 st.markdown(f"**Community:** {community_map.get(selected_account, 'N/A')}")
+                
+                risk_info = risk_scores.get(selected_account, {})
+                risk_level = risk_info.get("risk_level", "Unknown")
+                risk_color = "red" if risk_level == "High" else "orange" if risk_level == "Medium" else "green"
+                st.markdown(f"**Risk Level:** :{risk_color}[{risk_level}]")
+                st.markdown(f"**Risk Score:** {risk_info.get('total_risk', 0):.1f}/100")
                 
                 st.markdown("---")
                 st.markdown("**Feature Values:**")
@@ -380,7 +559,7 @@ def main():
                 if len(neighbors_df) > 0:
                     display_cols = ["account_id", "segment_code", "similarity", "distance", 
                                    "avg_txn_amount_30d", "txn_count_30d"]
-                    st.dataframe(neighbors_df[display_cols], width="stretch", hide_index=True)
+                    st.dataframe(neighbors_df[display_cols], use_container_width=True, hide_index=True)
                     
                     st.markdown("**Why are these accounts similar?**")
                     if len(neighbors_df) > 0:
@@ -399,12 +578,13 @@ def main():
             st.markdown("---")
             st.subheader("Account in Network Context")
             fig_selected = create_network_visualization(G, df, community_map, selected_account)
-            st.plotly_chart(fig_selected, width="stretch")
+            st.plotly_chart(fig_selected, use_container_width=True)
     
     with tab3:
         st.subheader("Community Analysis")
         
-        community_counts = df["community"].value_counts().reset_index()
+        community_series = df["community"]
+        community_counts = community_series.value_counts().reset_index()
         community_counts.columns = ["Community", "Account Count"]
         
         col1, col2 = st.columns(2)
@@ -413,14 +593,14 @@ def main():
             st.markdown("**Community Size Distribution**")
             fig_comm = px.bar(community_counts, x="Community", y="Account Count",
                              title="Accounts per Community")
-            st.plotly_chart(fig_comm, width="stretch")
+            st.plotly_chart(fig_comm, use_container_width=True)
         
         with col2:
             st.markdown("**Community Statistics**")
-            st.dataframe(community_counts, width="stretch", hide_index=True)
+            st.dataframe(community_counts, use_container_width=True, hide_index=True)
         
-        selected_community = st.selectbox("Explore Community", 
-                                          options=sorted(df["community"].unique()))
+        unique_communities = sorted(df["community"].unique())
+        selected_community = st.selectbox("Explore Community", options=unique_communities)
         
         if selected_community is not None:
             community_accounts = df[df["community"] == selected_community]
@@ -431,34 +611,161 @@ def main():
             
             with col1:
                 st.markdown("**Segment Distribution**")
-                segment_dist = community_accounts["segment_code"].value_counts()
-                fig_seg = px.pie(values=segment_dist.values, names=segment_dist.index,
+                segment_series = community_accounts["segment_code"]
+                segment_counts = segment_series.value_counts()
+                fig_seg = px.pie(values=segment_counts.values, names=segment_counts.index,
                                 title=f"Segments in Community {selected_community}")
-                st.plotly_chart(fig_seg, width="stretch")
+                st.plotly_chart(fig_seg, use_container_width=True)
             
             with col2:
                 st.markdown("**Average Feature Values**")
                 avg_features = community_accounts[NUMERIC_FEATURES].mean()
                 feature_df = pd.DataFrame({
                     "Feature": [f.replace("_", " ").title() for f in NUMERIC_FEATURES],
-                    "Average Value": avg_features.values
+                    "Average Value": list(avg_features.values)
                 })
-                st.dataframe(feature_df, width="stretch", hide_index=True)
+                st.dataframe(feature_df, use_container_width=True, hide_index=True)
             
             st.markdown("**Accounts in this Community**")
-            display_cols = ["account_id", "segment_code"] + NUMERIC_FEATURES[:5]
-            st.dataframe(community_accounts[display_cols], width="stretch", hide_index=True)
+            display_cols = ["account_id", "segment_code", "fraud_risk_score", "risk_level"] + NUMERIC_FEATURES[:5]
+            st.dataframe(community_accounts[display_cols], use_container_width=True, hide_index=True)
     
     with tab4:
+        st.subheader("Fraud Risk Analysis")
+        
+        col1, col2, col3 = st.columns(3)
+        high_risk = df[df["risk_level"] == "High"]
+        medium_risk = df[df["risk_level"] == "Medium"]
+        low_risk = df[df["risk_level"] == "Low"]
+        
+        with col1:
+            st.metric("High Risk Accounts", len(high_risk), delta=None)
+        with col2:
+            st.metric("Medium Risk Accounts", len(medium_risk), delta=None)
+        with col3:
+            st.metric("Low Risk Accounts", len(low_risk), delta=None)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Risk Score Distribution**")
+            fig_risk = px.histogram(df, x="fraud_risk_score", nbins=20,
+                                   color="risk_level",
+                                   color_discrete_map={"High": "red", "Medium": "orange", "Low": "green"},
+                                   title="Distribution of Risk Scores")
+            st.plotly_chart(fig_risk, use_container_width=True)
+        
+        with col2:
+            st.markdown("**Risk Level Breakdown**")
+            risk_counts = df["risk_level"].value_counts()
+            fig_pie = px.pie(values=risk_counts.values, names=risk_counts.index,
+                            color=risk_counts.index,
+                            color_discrete_map={"High": "red", "Medium": "orange", "Low": "green"},
+                            title="Risk Level Distribution")
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        st.markdown("**High Risk Accounts**")
+        if len(high_risk) > 0:
+            display_cols = ["account_id", "segment_code", "fraud_risk_score", "community",
+                           "avg_txn_amount_30d", "cash_withdrawal_ratio_90d", "country_risk_score"]
+            st.dataframe(high_risk.sort_values("fraud_risk_score", ascending=False)[display_cols],
+                        use_container_width=True, hide_index=True)
+        else:
+            st.info("No high-risk accounts detected with current thresholds.")
+        
+        st.markdown("---")
+        st.markdown("**Risk Score Components Explained**")
+        st.markdown("""
+        The fraud risk score (0-100) is calculated based on:
+        - **Hub Score (25%)**: How central the account is in the network (high connectivity)
+        - **Bridge Score (25%)**: How often the account connects different communities
+        - **Cluster Score (15%)**: Size of the account's community (larger clusters = higher risk)
+        - **Behavioral Score (35%)**: Based on cash withdrawal ratio, country risk, device/IP diversity
+        """)
+    
+    with tab5:
+        st.subheader("Clustering Algorithm Comparison")
+        
+        louvain_map = detect_communities_louvain(G)
+        dbscan_map = detect_communities_dbscan(df, eps=0.5, min_samples=3)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Louvain Clustering**")
+            louvain_clusters = len(set(louvain_map.values()))
+            st.metric("Communities Found", louvain_clusters)
+            
+            louvain_sizes = pd.Series(louvain_map).value_counts().reset_index()
+            louvain_sizes.columns = ["Community", "Size"]
+            fig_louv = px.bar(louvain_sizes, x="Community", y="Size", title="Louvain Community Sizes")
+            st.plotly_chart(fig_louv, use_container_width=True)
+            
+            st.caption("Louvain optimizes modularity on the graph structure")
+        
+        with col2:
+            st.markdown("**DBSCAN Clustering**")
+            dbscan_clusters = len(set(dbscan_map.values()))
+            noise_points = sum(1 for v in dbscan_map.values() if v == -1)
+            st.metric("Clusters Found", dbscan_clusters - (1 if -1 in dbscan_map.values() else 0))
+            st.metric("Noise Points", noise_points)
+            
+            dbscan_sizes = pd.Series(dbscan_map).value_counts().reset_index()
+            dbscan_sizes.columns = ["Cluster", "Size"]
+            fig_db = px.bar(dbscan_sizes, x="Cluster", y="Size", title="DBSCAN Cluster Sizes")
+            st.plotly_chart(fig_db, use_container_width=True)
+            
+            st.caption("DBSCAN clusters by density in feature space")
+        
+        st.markdown("---")
+        st.markdown("**Algorithm Comparison**")
+        st.markdown("""
+        | Aspect | Louvain | DBSCAN |
+        |--------|---------|--------|
+        | **Basis** | Graph structure (edges) | Feature space density |
+        | **Noise handling** | All nodes assigned | Identifies outliers (-1) |
+        | **Best for** | Network communities | Behavioral clusters |
+        | **Parameters** | None (automatic) | eps, min_samples |
+        """)
+    
+    with tab6:
         st.subheader("Data Explorer")
         
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.download_button(
+                "Export Accounts CSV",
+                export_to_csv(df),
+                "accounts_data.csv",
+                "text/csv"
+            )
+        with col2:
+            if len(edges_df) > 0:
+                st.download_button(
+                    "Export Relationships CSV",
+                    export_to_csv(edges_df),
+                    "relationships.csv",
+                    "text/csv"
+                )
+        with col3:
+            risk_df = pd.DataFrame([
+                {"account_id": k, **v} for k, v in risk_scores.items()
+            ])
+            st.download_button(
+                "Export Risk Scores CSV",
+                export_to_csv(risk_df),
+                "risk_scores.csv",
+                "text/csv"
+            )
+        
+        st.markdown("---")
         st.markdown("**Account Features Dataset**")
-        st.dataframe(df, width="stretch", hide_index=True)
+        st.dataframe(df, use_container_width=True, hide_index=True)
         
         st.markdown("---")
         st.markdown("**Relationship Edges**")
         if len(edges_df) > 0:
-            st.dataframe(edges_df.head(100), width="stretch", hide_index=True)
+            st.dataframe(edges_df.head(100), use_container_width=True, hide_index=True)
             st.caption(f"Showing first 100 of {len(edges_df)} relationships")
         else:
             st.warning("No relationships found. Try increasing the distance threshold.")
@@ -471,7 +778,7 @@ def main():
                             title="Feature Correlation Matrix",
                             color_continuous_scale="RdBu",
                             aspect="auto")
-        st.plotly_chart(fig_corr, width="stretch")
+        st.plotly_chart(fig_corr, use_container_width=True)
 
 
 if __name__ == "__main__":
