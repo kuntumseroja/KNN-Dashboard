@@ -14,6 +14,12 @@ import re
 import hashlib
 from typing import Dict, Optional
 
+# Import new modules
+from model_training import ModelTrainer, train_from_data
+from model_inference import ModelInference, infer_from_model
+from data_simulation import DataSimulator, simulate_data
+from advanced_analytics import AdvancedAnalytics, analyze_data
+
 # Try to import spacy for NER, fallback to regex-based if not available
 SPACY_AVAILABLE = False
 spacy = None
@@ -1261,9 +1267,10 @@ python -m spacy download en_core_web_sm    # English
         cross_anchor_metrics = {}
         cross_anchor_opportunities = pd.DataFrame()
     
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "Ecosystem Overview", "Account Details", "Anchor Analysis", 
-        "RM Opportunities", "Cluster Analysis", "Data Export"
+        "RM Opportunities", "Cluster Analysis", "Data Export",
+        "Model Training", "Model Inference", "Data Simulation", "Advanced Analytics"
     ])
     
     with tab1:
@@ -1890,6 +1897,619 @@ python -m spacy download en_core_web_sm    # English
         )
         fig_corr.update_layout(height=450)
         st.plotly_chart(fig_corr, use_container_width=True)
+    
+    with tab7:
+        st.markdown("#### Model Training")
+        st.info("Train ML models from your data for relationship detection and predictions.")
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.markdown("##### Training Configuration")
+            model_type = st.selectbox(
+                "Model Type",
+                ["KNN Relationship Model", "Predictive Model (Lead Score)", 
+                 "Predictive Model (Turnover)", "Full Model Suite"]
+            )
+            
+            if model_type == "KNN Relationship Model":
+                n_neighbors_train = st.slider("K Neighbors", 3, 12, 6, key="train_k")
+                model_name = st.text_input("Model Name", "knn_relationship_model")
+            
+            elif "Predictive Model" in model_type:
+                target_col = "lead_score_bri" if "Lead Score" in model_type else "turnover_90d"
+                model_algorithm = st.selectbox("Algorithm", ["Random Forest", "Gradient Boosting"])
+                test_size = st.slider("Test Size", 0.1, 0.4, 0.2, 0.05)
+                model_name = st.text_input("Model Name", f"predictive_{target_col}")
+            
+            else:  # Full Model Suite
+                n_neighbors_train = st.slider("K Neighbors", 3, 12, 6, key="train_k_full")
+                model_name = "full_model_suite"
+            
+            train_button = st.button("Train Model", type="primary", use_container_width=True)
+        
+        with col2:
+            st.markdown("##### Training Data")
+            st.dataframe(df.head(20), use_container_width=True)
+            st.caption(f"Total accounts: {len(df)}")
+        
+        if train_button:
+            try:
+                with st.spinner("Training model... This may take a few moments."):
+                    trainer = ModelTrainer()
+                    
+                    if model_type == "KNN Relationship Model":
+                        # Validate required columns
+                        required_cols = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+                        missing_cols = [col for col in required_cols if col not in df.columns]
+                        if missing_cols:
+                            st.error(f"Missing required columns: {', '.join(missing_cols)}")
+                        else:
+                            pipeline, cat_features = trainer.train_knn_model(
+                                df, n_neighbors=n_neighbors_train,
+                                model_name=model_name, save_model=True
+                            )
+                            st.success(f"✅ KNN model '{model_name}' trained successfully!")
+                            metadata = trainer.get_model_metadata(model_name)
+                            if metadata:
+                                with st.expander("Model Metadata"):
+                                    st.json(metadata)
+                    
+                    elif "Predictive Model" in model_type:
+                        # Validate target column exists
+                        if target_col not in df.columns:
+                            st.error(f"Target column '{target_col}' not found in data. Available columns: {', '.join(df.columns[:10])}...")
+                        else:
+                            model, metrics = trainer.train_predictive_model(
+                                df,
+                                target_column=target_col,
+                                model_type=model_algorithm.lower().replace(" ", "_"),
+                                model_name=model_name,
+                                test_size=test_size,
+                                save_model=True
+                            )
+                            st.success(f"✅ Predictive model '{model_name}' trained successfully!")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Test R²", f"{metrics['test_r2']:.4f}")
+                            with col2:
+                                st.metric("Test MAE", f"{metrics['test_mae']:.2f}")
+                            with col3:
+                                st.metric("CV R² Mean", f"{metrics['cv_r2_mean']:.4f}")
+                            
+                            with st.expander("Detailed Metrics"):
+                                st.json(metrics)
+                    
+                    else:  # Full Model Suite
+                        st.info("Training full model suite (this may take a while)...")
+                        models = trainer.train_full_model_suite(
+                            df, n_neighbors=n_neighbors_train, save_models=True
+                        )
+                        st.success(f"✅ Full model suite trained successfully!")
+                        st.info(f"Trained {len(models)} models: {', '.join(models.keys())}")
+                        
+                        # Show summary
+                        for model_key, model_obj in models.items():
+                            with st.expander(f"📦 {model_key}"):
+                                metadata = trainer.get_model_metadata(model_key)
+                                if metadata:
+                                    st.json(metadata)
+            
+            except Exception as e:
+                import traceback
+                st.error(f"❌ Error training model: {str(e)}")
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
+        
+        st.markdown("---")
+        st.markdown("##### Available Trained Models")
+        trainer = ModelTrainer()
+        available_models = trainer.list_available_models()
+        
+        if available_models:
+            for model_name in available_models:
+                with st.expander(f"📦 {model_name}"):
+                    metadata = trainer.get_model_metadata(model_name)
+                    if metadata:
+                        st.json(metadata)
+        else:
+            st.info("No trained models found. Train a model above.")
+    
+    with tab8:
+        st.markdown("#### Model Inference")
+        st.info("Use trained models to make predictions and detect relationships.")
+        
+        inference = ModelInference()
+        available_models = inference.list_available_models()
+        
+        if not available_models:
+            st.warning("No trained models available. Please train models in the 'Model Training' tab first.")
+        else:
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                st.markdown("##### Inference Configuration")
+                selected_model = st.selectbox("Select Model", available_models)
+                
+                inference_type = st.selectbox(
+                    "Inference Type",
+                    ["Relationship Detection", "Target Prediction", "Batch Prediction"]
+                )
+                
+                if inference_type == "Relationship Detection":
+                    n_neighbors_inf = st.slider("K Neighbors", 3, 12, 5, key="inf_k")
+                    max_dist_inf = st.slider("Max Distance", 0.5, 4.0, 2.0, 0.25, key="inf_dist")
+                
+                elif inference_type == "Target Prediction":
+                    target_col = st.selectbox(
+                        "Target Variable",
+                        ["lead_score_bri", "turnover_90d", "avg_txn_amount_30d"]
+                    )
+                
+                run_inference = st.button("Run Inference", type="primary", use_container_width=True)
+            
+            with col2:
+                st.markdown("##### Input Data")
+                st.dataframe(df.head(20), use_container_width=True)
+            
+            if run_inference:
+                with st.spinner("Running inference..."):
+                    try:
+                        if inference_type == "Relationship Detection":
+                            edges_df_inf, distances, indices = inference.predict_relationship(
+                                df, model_name=selected_model,
+                                n_neighbors=n_neighbors_inf, max_distance=max_dist_inf
+                            )
+                            st.success(f"✅ Found {len(edges_df_inf)} relationships!")
+                            st.dataframe(edges_df_inf.head(50), use_container_width=True)
+                        
+                        elif inference_type == "Target Prediction":
+                            predictions, confidence = inference.predict_target(
+                                df, target_column=target_col, model_name=f"predictive_{target_col}"
+                            )
+                            result_df = df.copy()
+                            result_df[f"predicted_{target_col}"] = predictions
+                            
+                            st.success(f"✅ Predictions generated for {target_col}!")
+                            st.metric("Mean Prediction", f"{np.mean(predictions):.2f}")
+                            if confidence:
+                                st.json(confidence)
+                            
+                            display_cols = ["account_id", "legal_name", target_col, f"predicted_{target_col}"]
+                            if target_col in result_df.columns:
+                                result_df["prediction_error"] = abs(result_df[target_col] - result_df[f"predicted_{target_col}"])
+                                display_cols.append("prediction_error")
+                            
+                            st.dataframe(result_df[display_cols].head(50), use_container_width=True)
+                        
+                        else:  # Batch Prediction
+                            result_df = inference.batch_predict(df)
+                            st.success("✅ Batch predictions completed!")
+                            pred_cols = [col for col in result_df.columns if col.startswith("predicted_")]
+                            st.dataframe(result_df[["account_id", "legal_name"] + pred_cols].head(50), use_container_width=True)
+                    
+                    except Exception as e:
+                        st.error(f"Error during inference: {str(e)}")
+    
+    with tab9:
+        st.markdown("#### Data Simulation")
+        st.info("Generate synthetic data for testing and development. Simulate both internal (BRI) and external data sources.")
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.markdown("##### Simulation Configuration")
+            data_type = st.selectbox(
+                "Data Type",
+                ["Internal (BRI)", "External (Other Banks)", "Combined"]
+            )
+            
+            n_accounts_sim = st.slider("Number of Accounts", 20, 500, 100, 20)
+            
+            if data_type == "Internal (BRI)":
+                include_historical = st.checkbox("Include Historical Data", value=True)
+                historical_months = st.slider("Historical Months", 3, 12, 6) if include_historical else 0
+            
+            elif data_type == "External (Other Banks)":
+                data_source = st.selectbox(
+                    "External Source",
+                    ["external_bank", "public_registry", "credit_bureau"]
+                )
+                include_temporal = st.checkbox("Include Temporal Data", value=True)
+                time_periods = st.slider("Time Periods", 1, 6, 3) if include_temporal else 0
+            
+            else:  # Combined
+                n_internal = st.slider("Internal Accounts", 10, 200, 60, 10)
+                n_external = st.slider("External Accounts", 10, 200, 40, 10)
+                include_temporal = st.checkbox("Include Temporal Data", value=True)
+            
+            add_noise = st.checkbox("Add Noise", value=False)
+            noise_level = st.slider("Noise Level", 0.01, 0.20, 0.05, 0.01) if add_noise else 0.0
+            
+            simulate_button = st.button("Generate Data", type="primary", use_container_width=True)
+        
+        with col2:
+            st.markdown("##### Simulated Data Preview")
+            
+            if simulate_button:
+                with st.spinner("Generating simulated data..."):
+                    try:
+                        simulator = DataSimulator()
+                        
+                        if data_type == "Internal (BRI)":
+                            sim_df = simulator.simulate_internal_data(
+                                n_accounts=n_accounts_sim,
+                                include_historical=include_historical,
+                                historical_months=historical_months if include_historical else 0
+                            )
+                        
+                        elif data_type == "External (Other Banks)":
+                            sim_df = simulator.simulate_external_data(
+                                n_accounts=n_accounts_sim,
+                                data_source=data_source,
+                                include_temporal=include_temporal,
+                                time_periods=time_periods if include_temporal else 0
+                            )
+                        
+                        else:  # Combined
+                            sim_df = simulator.simulate_combined_dataset(
+                                n_internal=n_internal,
+                                n_external=n_external,
+                                include_temporal=include_temporal
+                            )
+                        
+                        if add_noise:
+                            sim_df = simulator.add_noise_to_data(sim_df, noise_level=noise_level)
+                        
+                        st.success(f"✅ Generated {len(sim_df)} accounts!")
+                        st.dataframe(sim_df.head(50), use_container_width=True)
+                        
+                        # Statistics
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Total Accounts", len(sim_df))
+                        with col2:
+                            st.metric("Internal", len(sim_df[sim_df["data_source"].str.contains("internal", case=False)]) if "data_source" in sim_df.columns else 0)
+                        with col3:
+                            st.metric("External", len(sim_df[sim_df["data_source"].str.contains("external", case=False)]) if "data_source" in sim_df.columns else 0)
+                        with col4:
+                            st.metric("NTB", len(sim_df[sim_df["bri_status"] == "NTB"]) if "bri_status" in sim_df.columns else 0)
+                        
+                        # Download button
+                        st.download_button(
+                            "Download Simulated Data",
+                            sim_df.to_csv(index=False).encode('utf-8'),
+                            f"simulated_{data_type.lower().replace(' ', '_')}_{len(sim_df)}.csv",
+                            "text/csv"
+                        )
+                    
+                    except Exception as e:
+                        st.error(f"Error generating data: {str(e)}")
+            else:
+                st.info("Configure settings and click 'Generate Data' to create simulated dataset.")
+    
+    with tab10:
+        st.markdown("#### Advanced Analytics")
+        st.info("Advanced analytics including anomaly detection, risk scoring, forecasting, and trend analysis.")
+        
+        analytics_type = st.selectbox(
+            "Analysis Type",
+            ["Comprehensive", "Anomaly Detection", "Risk Scoring", "Growth Analysis", "Forecasting",
+             "Lead Quality Scoring", "Customer Lifetime Value", "Cross-Sell Opportunities", 
+             "Relationship Strength", "Churn Risk Prediction", "Portfolio Health", "RM Action Prioritization"]
+        )
+        
+        run_analytics = st.button("Run Analysis", type="primary")
+        
+        if run_analytics:
+            with st.spinner("Running advanced analytics..."):
+                try:
+                    analytics = AdvancedAnalytics()
+                    
+                    if analytics_type == "Comprehensive":
+                        results = analytics.create_analytics_dashboard_data(df)
+                        
+                        # Anomalies
+                        st.markdown("##### Anomaly Detection")
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Total Anomalies", results["anomalies"]["total"])
+                        with col2:
+                            st.metric("Critical", results["anomalies"]["critical"])
+                        with col3:
+                            st.metric("High", results["anomalies"]["high"])
+                        with col4:
+                            st.metric("Medium", results["anomalies"]["data"][results["anomalies"]["data"]["anomaly_severity"] == "Medium"].shape[0])
+                        
+                        st.dataframe(results["anomalies"]["data"].head(20), use_container_width=True)
+                        
+                        # Risk Scoring
+                        st.markdown("---")
+                        st.markdown("##### Risk Scoring")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Average Risk Score", f"{results['risk']['avg_risk_score']:.2f}")
+                            st.metric("High Risk Accounts", results["risk"]["high_risk_count"])
+                        with col2:
+                            risk_dist = results["risk"]["data"]["risk_level"].value_counts()
+                            fig_risk = px.pie(values=risk_dist.values, names=risk_dist.index, hole=0.4)
+                            st.plotly_chart(fig_risk, use_container_width=True)
+                        
+                        st.dataframe(results["risk"]["data"].head(20), use_container_width=True)
+                        
+                        # Growth
+                        if "avg_growth_rate" in results["growth"] and results["growth"]["avg_growth_rate"] != 0:
+                            st.markdown("---")
+                            st.markdown("##### Growth Analysis")
+                            st.metric("Average Growth Rate", f"{results['growth']['avg_growth_rate']:.2f}%")
+                        
+                        # Forecasting
+                        st.markdown("---")
+                        st.markdown("##### Opportunity Forecasting")
+                        forecast_cols = [col for col in results["forecast"].columns if "forecasted_opportunity_score" in col]
+                        if forecast_cols:
+                            sample_forecast = results["forecast"][["account_id", "legal_name"] + forecast_cols[:3]].head(10)
+                            st.dataframe(sample_forecast, use_container_width=True)
+                    
+                    elif analytics_type == "Anomaly Detection":
+                        df_anomalies = analytics.detect_anomalies(df)
+                        st.success(f"✅ Detected {df_anomalies['anomaly_flag'].sum()} anomalies")
+                        
+                        fig_anomalies = px.scatter(
+                            df_anomalies,
+                            x="turnover_90d",
+                            y="lead_score_bri",
+                            color="anomaly_severity",
+                            size="anomaly_score",
+                            hover_data=["account_id", "legal_name"],
+                            title="Anomaly Detection Results"
+                        )
+                        st.plotly_chart(fig_anomalies, use_container_width=True)
+                        
+                        st.dataframe(df_anomalies[["account_id", "legal_name", "anomaly_flag", "anomaly_score", "anomaly_severity"]].head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Risk Scoring":
+                        df_risk = analytics.risk_scoring(df)
+                        st.success("✅ Risk scores calculated")
+                        
+                        fig_risk = px.histogram(
+                            df_risk,
+                            x="risk_score",
+                            color="risk_level",
+                            nbins=30,
+                            title="Risk Score Distribution"
+                        )
+                        st.plotly_chart(fig_risk, use_container_width=True)
+                        
+                        st.dataframe(df_risk[["account_id", "legal_name", "risk_score", "risk_level"]].sort_values("risk_score", ascending=False).head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Growth Analysis":
+                        df_growth = analytics.calculate_growth_metrics(df)
+                        st.success("✅ Growth metrics calculated")
+                        
+                        if "avg_growth_rate" in df_growth.columns:
+                            st.metric("Average Growth Rate", f"{df_growth['avg_growth_rate'].mean():.2f}%")
+                            growth_data = df_growth[["account_id", "legal_name", "avg_growth_rate", "growth_trend"]].dropna()
+                            st.dataframe(growth_data.head(50), use_container_width=True)
+                        else:
+                            st.info("No historical data available for growth analysis.")
+                    
+                    elif analytics_type == "Forecasting":
+                        account_select = st.selectbox("Select Account for Forecasting", df["account_id"].tolist())
+                        months = st.slider("Months Ahead", 1, 12, 3)
+                        method = st.selectbox("Forecast Method", ["trend", "moving_average", "exponential"])
+                        
+                        forecast_result = analytics.predict_future_turnover(df, account_select, months_ahead=months, method=method)
+                        
+                        if "error" not in forecast_result:
+                            st.success(f"✅ Forecast generated for {account_select}")
+                            
+                            fig_forecast = go.Figure()
+                            fig_forecast.add_trace(go.Scatter(
+                                y=forecast_result["predictions"],
+                                mode="lines+markers",
+                                name="Forecast",
+                                line=dict(color="blue", width=2)
+                            ))
+                            fig_forecast.add_trace(go.Scatter(
+                                y=forecast_result["confidence_upper"],
+                                mode="lines",
+                                name="Upper Bound",
+                                line=dict(color="lightblue", dash="dash")
+                            ))
+                            fig_forecast.add_trace(go.Scatter(
+                                y=forecast_result["confidence_lower"],
+                                mode="lines",
+                                name="Lower Bound",
+                                line=dict(color="lightblue", dash="dash"),
+                                fill="tonexty"
+                            ))
+                            fig_forecast.update_layout(
+                                title=f"Turnover Forecast - {account_select}",
+                                xaxis_title="Month",
+                                yaxis_title="Turnover",
+                                height=400
+                            )
+                            st.plotly_chart(fig_forecast, use_container_width=True)
+                            
+                            st.json(forecast_result)
+                    
+                    elif analytics_type == "Lead Quality Scoring":
+                        df_lead_quality = analytics.calculate_lead_quality_score(df, G, opportunity_scores)
+                        st.success("✅ Lead quality scores calculated")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("A+ Grade", len(df_lead_quality[df_lead_quality["lead_quality_grade"] == "A+"]))
+                        with col2:
+                            st.metric("A Grade", len(df_lead_quality[df_lead_quality["lead_quality_grade"] == "A"]))
+                        with col3:
+                            st.metric("B Grade", len(df_lead_quality[df_lead_quality["lead_quality_grade"] == "B"]))
+                        with col4:
+                            st.metric("Avg Score", f"{df_lead_quality['lead_quality_score'].mean():.1f}")
+                        
+                        fig_lead = px.histogram(
+                            df_lead_quality,
+                            x="lead_quality_score",
+                            color="lead_quality_grade",
+                            nbins=20,
+                            title="Lead Quality Score Distribution"
+                        )
+                        st.plotly_chart(fig_lead, use_container_width=True)
+                        
+                        display_cols = ["account_id", "legal_name", "lead_quality_score", "lead_quality_grade",
+                                       "financial_quality", "network_value", "relationship_potential", "behavioral_quality"]
+                        st.dataframe(df_lead_quality[display_cols].sort_values("lead_quality_score", ascending=False).head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Customer Lifetime Value":
+                        df_clv = analytics.calculate_customer_lifetime_value(df)
+                        st.success("✅ CLV estimates calculated")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Strategic Tier", len(df_clv[df_clv["clv_tier"] == "Strategic"]))
+                        with col2:
+                            st.metric("Enterprise Tier", len(df_clv[df_clv["clv_tier"] == "Enterprise"]))
+                        with col3:
+                            st.metric("Premium Tier", len(df_clv[df_clv["clv_tier"] == "Premium"]))
+                        with col4:
+                            avg_clv = df_clv["clv_estimate"].mean() / 1e9
+                            st.metric("Avg CLV", f"Rp {avg_clv:.2f}B")
+                        
+                        fig_clv = px.box(
+                            df_clv,
+                            x="clv_tier",
+                            y="clv_estimate",
+                            title="CLV Distribution by Tier"
+                        )
+                        st.plotly_chart(fig_clv, use_container_width=True)
+                        
+                        st.dataframe(df_clv[["account_id", "legal_name", "clv_estimate", "clv_tier"]].sort_values("clv_estimate", ascending=False).head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Cross-Sell Opportunities":
+                        df_crosssell = analytics.identify_cross_sell_opportunities(df, G)
+                        st.success("✅ Cross-sell opportunities identified")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Critical", len(df_crosssell[df_crosssell["cross_sell_priority"] == "Critical"]))
+                        with col2:
+                            st.metric("High", len(df_crosssell[df_crosssell["cross_sell_priority"] == "High"]))
+                        with col3:
+                            st.metric("Medium", len(df_crosssell[df_crosssell["cross_sell_priority"] == "Medium"]))
+                        with col4:
+                            st.metric("Avg Score", f"{df_crosssell['cross_sell_score'].mean():.1f}")
+                        
+                        st.dataframe(df_crosssell[["account_id", "legal_name", "cross_sell_score", "cross_sell_priority", "opportunity_reasons"]].sort_values("cross_sell_score", ascending=False).head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Relationship Strength":
+                        df_relationship = analytics.calculate_relationship_strength(df, G)
+                        st.success("✅ Relationship strength scores calculated")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Strategic", len(df_relationship[df_relationship["relationship_tier"] == "Strategic"]))
+                        with col2:
+                            st.metric("Strong", len(df_relationship[df_relationship["relationship_tier"] == "Strong"]))
+                        with col3:
+                            st.metric("Moderate", len(df_relationship[df_relationship["relationship_tier"] == "Moderate"]))
+                        with col4:
+                            st.metric("Avg Strength", f"{df_relationship['relationship_strength'].mean():.1f}")
+                        
+                        fig_rel = px.histogram(
+                            df_relationship,
+                            x="relationship_strength",
+                            color="relationship_tier",
+                            nbins=20,
+                            title="Relationship Strength Distribution"
+                        )
+                        st.plotly_chart(fig_rel, use_container_width=True)
+                        
+                        st.dataframe(df_relationship[["account_id", "legal_name", "relationship_strength", "relationship_tier"]].sort_values("relationship_strength", ascending=False).head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Churn Risk Prediction":
+                        df_churn = analytics.predict_churn_risk(df, G)
+                        st.success("✅ Churn risk scores calculated")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Critical Risk", len(df_churn[df_churn["churn_risk_level"] == "Critical"]))
+                        with col2:
+                            st.metric("High Risk", len(df_churn[df_churn["churn_risk_level"] == "High"]))
+                        with col3:
+                            st.metric("Medium Risk", len(df_churn[df_churn["churn_risk_level"] == "Medium"]))
+                        with col4:
+                            st.metric("Avg Risk", f"{df_churn['churn_risk_score'].mean():.1f}")
+                        
+                        fig_churn = px.scatter(
+                            df_churn,
+                            x="turnover_90d",
+                            y="churn_risk_score",
+                            color="churn_risk_level",
+                            size="lead_score_bri",
+                            hover_data=["account_id", "legal_name"],
+                            title="Churn Risk vs Portfolio Value"
+                        )
+                        st.plotly_chart(fig_churn, use_container_width=True)
+                        
+                        st.dataframe(df_churn[["account_id", "legal_name", "churn_risk_score", "churn_risk_level"]].sort_values("churn_risk_score", ascending=False).head(50), use_container_width=True)
+                    
+                    elif analytics_type == "Portfolio Health":
+                        health_metrics = analytics.calculate_portfolio_health(df, G)
+                        st.success("✅ Portfolio health analysis completed")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Health Grade", health_metrics.get("health_grade", "N/A"))
+                            st.metric("Health Score", f"{health_metrics.get('overall_health_score', 0):.1f}/100")
+                        with col2:
+                            st.metric("Existing Rate", f"{health_metrics.get('existing_rate', 0):.1%}")
+                            st.metric("NTB Rate", f"{health_metrics.get('ntb_rate', 0):.1%}")
+                        with col3:
+                            st.metric("Avg Lead Score", f"{health_metrics.get('avg_lead_score', 0):.1f}")
+                            st.metric("High Quality Leads", health_metrics.get("high_quality_leads", 0))
+                        with col4:
+                            total_value = health_metrics.get("total_portfolio_value", 0) / 1e9
+                            st.metric("Portfolio Value", f"Rp {total_value:.2f}B")
+                            st.metric("Hub Accounts", health_metrics.get("hub_accounts", 0))
+                        
+                        st.markdown("##### Portfolio Health Details")
+                        st.json(health_metrics)
+                    
+                    elif analytics_type == "RM Action Prioritization":
+                        df_rm_actions = analytics.create_rm_action_prioritization(df, G, opportunity_scores)
+                        st.success("✅ RM action prioritization completed")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Immediate Action", len(df_rm_actions[df_rm_actions["rm_action_priority_level"] == "Immediate Action"]))
+                        with col2:
+                            st.metric("Priority", len(df_rm_actions[df_rm_actions["rm_action_priority_level"] == "Priority"]))
+                        with col3:
+                            st.metric("Follow-up", len(df_rm_actions[df_rm_actions["rm_action_priority_level"] == "Follow-up"]))
+                        with col4:
+                            st.metric("Monitor", len(df_rm_actions[df_rm_actions["rm_action_priority_level"] == "Monitor"]))
+                        
+                        # Top priority accounts
+                        st.markdown("##### Top Priority Accounts for RM Action")
+                        top_priority = df_rm_actions.nlargest(20, "rm_action_priority")[[
+                            "account_id", "legal_name", "rm_action_priority", "rm_action_priority_level",
+                            "recommended_rm_action", "lead_quality_score", "churn_risk_score"
+                        ]]
+                        st.dataframe(top_priority, use_container_width=True)
+                        
+                        # Action distribution
+                        fig_actions = px.bar(
+                            df_rm_actions["rm_action_priority_level"].value_counts().reset_index(),
+                            x="index",
+                            y="rm_action_priority_level",
+                            title="RM Action Priority Distribution"
+                        )
+                        st.plotly_chart(fig_actions, use_container_width=True)
+                
+                except Exception as e:
+                    st.error(f"Error running analytics: {str(e)}")
 
 
 if __name__ == "__main__":
