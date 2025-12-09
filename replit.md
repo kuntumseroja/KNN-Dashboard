@@ -12,6 +12,9 @@ An interactive Streamlit dashboard for Relationship Managers (RM) that discovers
 - Community detection using Louvain and DBSCAN algorithms
 - CSV/Excel upload support for custom datasets
 - Export functionality for accounts, relationships, and opportunities
+- **Cross-Anchor Relationship Detection**: Identify relationships between accounts across different anchor groups
+- **Bridge Account Analysis**: Find accounts connecting multiple anchor ecosystems
+- **Cross-Anchor Opportunity Scoring**: Prioritize high-value cross-anchor relationships
 
 ## Project Architecture
 
@@ -62,9 +65,9 @@ An interactive Streamlit dashboard for Relationship Managers (RM) that discovers
 
 ### Dashboard Tabs
 
-1. **Ecosystem Overview**: Network visualization, composition charts, hub accounts
-2. **Account Details**: Individual account lookup with connected accounts and opportunity scores
-3. **Anchor Analysis**: Anchor group statistics, turnover analysis, supply chain sunburst
+1. **Ecosystem Overview**: Network visualization, composition charts, hub accounts, cross-anchor metrics
+2. **Account Details**: Individual account lookup with connected accounts, opportunity scores, cross-anchor relationship details
+3. **Anchor Analysis**: Anchor group statistics, turnover analysis, supply chain sunburst, **cross-anchor relationship analysis**
 4. **RM Opportunities**: Priority pipeline, NTB targets, opportunity scoring methodology
 5. **Cluster Analysis**: Louvain vs DBSCAN comparison, community exploration
 6. **Data Export**: Download datasets, view correlations
@@ -98,12 +101,19 @@ Priority levels:
 - openpyxl (Excel support)
 
 ## Recent Changes
+- January 2025: Added Cross-Anchor Relationship Detection with comprehensive parameters and metrics
+- January 2025: Implemented Bridge Account identification and scoring system
+- January 2025: Enhanced network visualization with cross-anchor edge highlighting
+- January 2025: Added Cross-Anchor Opportunity scoring and analysis dashboard
 - December 2025: Rebranded to "OBS Account Relationship Dashboard"
 - December 2025: Implemented poultry ecosystem data model with JAPFA as anchor
 - December 2025: Modernized UI for Relationship Manager focus
 - December 2025: Added RM Opportunity scoring replacing fraud risk scoring
 - December 2025: Added Anchor Analysis and ecosystem role visualization
 - December 2025: Initial MVP with KNN, community detection, network visualization
+
+## Documentation
+- **[Cross-Anchor Relationships Guide](CROSS_ANCHOR_RELATIONSHIPS.md)**: Comprehensive documentation on cross-anchor relationship detection parameters, use cases, and best practices
 
 ## User Preferences
 - Dashboard focused on RM use case for banking opportunities

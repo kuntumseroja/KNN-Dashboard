@@ -443,11 +443,19 @@ def find_neighbors_and_edges(df, pipeline, cat_features, max_distance=2.0):
     edges = []
     seen_pairs = set()
     
+    # Create anchor group mapping for quick lookup
+    anchor_map = dict(zip(df["account_id"], df.get("anchor_group", "Independent")))
+    anchor_level_map = dict(zip(df["account_id"], df.get("anchor_level", 2)))
+    
     for i, (d_row, idx_row) in enumerate(zip(distances, indices)):
         src_acc = account_ids[i]
+        src_anchor = anchor_map.get(src_acc, "Independent")
+        src_level = anchor_level_map.get(src_acc, 2)
         
         for dist, j in zip(d_row[1:], idx_row[1:]):
             dst_acc = account_ids[j]
+            dst_anchor = anchor_map.get(dst_acc, "Independent")
+            dst_level = anchor_level_map.get(dst_acc, 2)
             
             edge_key = tuple(sorted([src_acc, dst_acc]))
             if edge_key in seen_pairs:
@@ -456,11 +464,23 @@ def find_neighbors_and_edges(df, pipeline, cat_features, max_distance=2.0):
             
             if dist <= max_distance:
                 similarity = float(np.exp(-dist))
+                
+                # Determine if this is a cross-anchor relationship
+                is_cross_anchor = (src_anchor != dst_anchor) and (src_anchor != "Independent") and (dst_anchor != "Independent")
+                is_anchor_bridge = (src_level <= 1) or (dst_level <= 1)
+                anchor_distance = abs(src_level - dst_level)
+                
                 edges.append({
                     "src": src_acc,
                     "dst": dst_acc,
                     "distance": float(dist),
-                    "similarity": similarity
+                    "similarity": similarity,
+                    "src_anchor": src_anchor,
+                    "dst_anchor": dst_anchor,
+                    "is_cross_anchor": is_cross_anchor,
+                    "is_anchor_bridge": is_anchor_bridge,
+                    "anchor_distance": anchor_distance,
+                    "anchor_level_diff": anchor_distance
                 })
     
     return pd.DataFrame(edges)
@@ -472,9 +492,19 @@ def build_graph(df, edges_df):
     
     if len(edges_df) > 0:
         for _, row in edges_df.iterrows():
-            G.add_edge(row["src"], row["dst"], 
-                       distance=row["distance"], 
-                       similarity=row["similarity"])
+            edge_attrs = {
+                "distance": row["distance"], 
+                "similarity": row["similarity"]
+            }
+            # Add cross-anchor attributes if available
+            if "is_cross_anchor" in row:
+                edge_attrs["is_cross_anchor"] = row["is_cross_anchor"]
+                edge_attrs["src_anchor"] = row.get("src_anchor", "Unknown")
+                edge_attrs["dst_anchor"] = row.get("dst_anchor", "Unknown")
+                edge_attrs["is_anchor_bridge"] = row.get("is_anchor_bridge", False)
+                edge_attrs["anchor_distance"] = row.get("anchor_distance", 0)
+            
+            G.add_edge(row["src"], row["dst"], **edge_attrs)
     
     return G
 
@@ -568,27 +598,50 @@ def calculate_opportunity_score(G, df, community_map):
     return scores
 
 
-def create_network_visualization(G, df, community_map, selected_account=None, color_by="ecosystem_role"):
+def create_network_visualization(G, df, community_map, selected_account=None, color_by="ecosystem_role", highlight_cross_anchor=True):
     if len(G.nodes()) == 0:
         return go.Figure()
     
     pos = nx.spring_layout(G, seed=42, k=2)
     
-    edge_x = []
-    edge_y = []
+    # Separate edges for regular and cross-anchor relationships
+    regular_edge_x = []
+    regular_edge_y = []
+    cross_anchor_edge_x = []
+    cross_anchor_edge_y = []
     
     for edge in G.edges(data=True):
         x0, y0 = pos[edge[0]]
         x1, y1 = pos[edge[1]]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
+        is_cross_anchor = edge[2].get("is_cross_anchor", False) if len(edge[2]) > 0 else False
+        
+        if highlight_cross_anchor and is_cross_anchor:
+            cross_anchor_edge_x.extend([x0, x1, None])
+            cross_anchor_edge_y.extend([y0, y1, None])
+        else:
+            regular_edge_x.extend([x0, x1, None])
+            regular_edge_y.extend([y0, y1, None])
     
     edge_trace = go.Scatter(
-        x=edge_x, y=edge_y,
+        x=regular_edge_x, y=regular_edge_y,
         line=dict(width=1, color="rgba(150,150,150,0.4)"),
         hoverinfo="none",
-        mode="lines"
+        mode="lines",
+        name="Regular Relationships"
     )
+    
+    traces = [edge_trace]
+    
+    # Add cross-anchor edge trace if enabled
+    if highlight_cross_anchor and len(cross_anchor_edge_x) > 0:
+        cross_anchor_trace = go.Scatter(
+            x=cross_anchor_edge_x, y=cross_anchor_edge_y,
+            line=dict(width=2.5, color="rgba(239,68,68,0.7)"),
+            hoverinfo="none",
+            mode="lines",
+            name="Cross-Anchor Relationships"
+        )
+        traces.append(cross_anchor_trace)
     
     node_x = []
     node_y = []
@@ -663,6 +716,8 @@ def create_network_visualization(G, df, community_map, selected_account=None, co
         )
     )
     
+    traces.append(node_trace)
+    
     if selected_account and selected_account in G.nodes():
         selected_idx = list(G.nodes()).index(selected_account)
         highlight_trace = go.Scatter(
@@ -677,9 +732,9 @@ def create_network_visualization(G, df, community_map, selected_account=None, co
             ),
             showlegend=False
         )
-        fig = go.Figure(data=[edge_trace, node_trace, highlight_trace])
-    else:
-        fig = go.Figure(data=[edge_trace, node_trace])
+        traces.append(highlight_trace)
+    
+    fig = go.Figure(data=traces)
     
     fig.update_layout(
         title=dict(
@@ -707,15 +762,148 @@ def get_account_neighbors(G, account_id, df):
     if not neighbors:
         return pd.DataFrame()
     
+    account_anchor = df[df["account_id"] == account_id]["anchor_group"].iloc[0] if len(df[df["account_id"] == account_id]) > 0 else "Unknown"
+    
     neighbor_data = []
     for neighbor in neighbors:
         edge_data = G.get_edge_data(account_id, neighbor)
         account_info = df[df["account_id"] == neighbor].iloc[0].to_dict()
         account_info["similarity"] = edge_data.get("similarity", 0)
         account_info["distance"] = edge_data.get("distance", 0)
+        
+        # Add cross-anchor relationship info
+        neighbor_anchor = account_info.get("anchor_group", "Unknown")
+        account_info["is_cross_anchor"] = (account_anchor != neighbor_anchor) and (account_anchor != "Independent") and (neighbor_anchor != "Independent")
+        account_info["anchor_relationship"] = f"{account_anchor} ↔ {neighbor_anchor}" if account_info["is_cross_anchor"] else "Same Anchor"
+        
         neighbor_data.append(account_info)
     
     return pd.DataFrame(neighbor_data).sort_values("similarity", ascending=False)
+
+
+def calculate_cross_anchor_metrics(G, df, edges_df):
+    """Calculate metrics for cross-anchor relationships"""
+    if len(edges_df) == 0:
+        return {}
+    
+    # Ensure cross-anchor columns exist
+    if "is_cross_anchor" not in edges_df.columns:
+        anchor_map = dict(zip(df["account_id"], df.get("anchor_group", "Independent")))
+        edges_df["src_anchor"] = edges_df["src"].map(anchor_map)
+        edges_df["dst_anchor"] = edges_df["dst"].map(anchor_map)
+        edges_df["is_cross_anchor"] = (
+            (edges_df["src_anchor"] != edges_df["dst_anchor"]) & 
+            (edges_df["src_anchor"] != "Independent") & 
+            (edges_df["dst_anchor"] != "Independent")
+        )
+    
+    total_edges = len(edges_df)
+    cross_anchor_edges = edges_df["is_cross_anchor"].sum() if "is_cross_anchor" in edges_df.columns else 0
+    cross_anchor_ratio = cross_anchor_edges / total_edges if total_edges > 0 else 0
+    
+    # Find anchor bridge accounts (accounts that connect different anchor groups)
+    bridge_accounts = {}
+    if "is_cross_anchor" in edges_df.columns:
+        cross_anchor_edges_subset = edges_df[edges_df["is_cross_anchor"] == True]
+        for _, edge in cross_anchor_edges_subset.iterrows():
+            for acc in [edge["src"], edge["dst"]]:
+                if acc not in bridge_accounts:
+                    bridge_accounts[acc] = {
+                        "cross_anchor_connections": 0,
+                        "connected_anchors": set(),
+                        "avg_similarity": []
+                    }
+                bridge_accounts[acc]["cross_anchor_connections"] += 1
+                bridge_accounts[acc]["connected_anchors"].add(edge.get("src_anchor", "Unknown"))
+                bridge_accounts[acc]["connected_anchors"].add(edge.get("dst_anchor", "Unknown"))
+                bridge_accounts[acc]["avg_similarity"].append(edge.get("similarity", 0))
+    
+    # Calculate bridge scores
+    for acc in bridge_accounts:
+        bridge_accounts[acc]["connected_anchors"] = len(bridge_accounts[acc]["connected_anchors"])
+        bridge_accounts[acc]["avg_similarity"] = np.mean(bridge_accounts[acc]["avg_similarity"]) if bridge_accounts[acc]["avg_similarity"] else 0
+        bridge_accounts[acc]["bridge_score"] = (
+            bridge_accounts[acc]["cross_anchor_connections"] * 0.4 +
+            bridge_accounts[acc]["connected_anchors"] * 0.3 +
+            bridge_accounts[acc]["avg_similarity"] * 30
+        )
+    
+    # Anchor pair connectivity matrix
+    anchor_pairs = {}
+    if "is_cross_anchor" in edges_df.columns:
+        for _, edge in edges_df[edges_df["is_cross_anchor"] == True].iterrows():
+            src_anchor = edge.get("src_anchor", "Unknown")
+            dst_anchor = edge.get("dst_anchor", "Unknown")
+            pair_key = tuple(sorted([src_anchor, dst_anchor]))
+            if pair_key not in anchor_pairs:
+                anchor_pairs[pair_key] = {"count": 0, "avg_similarity": [], "total_similarity": 0}
+            anchor_pairs[pair_key]["count"] += 1
+            anchor_pairs[pair_key]["avg_similarity"].append(edge.get("similarity", 0))
+            anchor_pairs[pair_key]["total_similarity"] += edge.get("similarity", 0)
+    
+    for pair_key in anchor_pairs:
+        anchor_pairs[pair_key]["avg_similarity"] = np.mean(anchor_pairs[pair_key]["avg_similarity"]) if anchor_pairs[pair_key]["avg_similarity"] else 0
+    
+    return {
+        "total_relationships": total_edges,
+        "cross_anchor_relationships": int(cross_anchor_edges),
+        "cross_anchor_ratio": cross_anchor_ratio,
+        "bridge_accounts": bridge_accounts,
+        "anchor_pairs": anchor_pairs,
+        "top_bridges": sorted(bridge_accounts.items(), key=lambda x: x[1]["bridge_score"], reverse=True)[:10] if bridge_accounts else []
+    }
+
+
+def identify_cross_anchor_opportunities(df, edges_df, cross_anchor_metrics):
+    """Identify opportunities based on cross-anchor relationships"""
+    opportunities = []
+    
+    if "is_cross_anchor" not in edges_df.columns or edges_df["is_cross_anchor"].sum() == 0:
+        return pd.DataFrame()
+    
+    cross_anchor_edges = edges_df[edges_df["is_cross_anchor"] == True].copy()
+    
+    for _, edge in cross_anchor_edges.iterrows():
+        src_acc = edge["src"]
+        dst_acc = edge["dst"]
+        
+        src_data = df[df["account_id"] == src_acc].iloc[0] if len(df[df["account_id"] == src_acc]) > 0 else None
+        dst_data = df[df["account_id"] == dst_acc].iloc[0] if len(df[df["account_id"] == dst_acc]) > 0 else None
+        
+        if src_data is None or dst_data is None:
+            continue
+        
+        # Calculate opportunity score for cross-anchor relationship
+        opportunity_score = edge.get("similarity", 0) * 50
+        
+        # Boost score if one is NTB
+        if src_data.get("bri_status") == "NTB" or dst_data.get("bri_status") == "NTB":
+            opportunity_score += 20
+        
+        # Boost score if high lead scores
+        avg_lead_score = (src_data.get("lead_score_bri", 0) + dst_data.get("lead_score_bri", 0)) / 2
+        opportunity_score += avg_lead_score * 0.3
+        
+        # Boost if anchor level is close (direct relationships)
+        anchor_level_diff = abs(src_data.get("anchor_level", 2) - dst_data.get("anchor_level", 2))
+        if anchor_level_diff <= 1:
+            opportunity_score += 15
+        
+        opportunities.append({
+            "account_1": src_acc,
+            "account_1_name": src_data.get("legal_name", src_acc),
+            "account_1_anchor": src_data.get("anchor_group", "Unknown"),
+            "account_1_status": src_data.get("bri_status", "Unknown"),
+            "account_2": dst_acc,
+            "account_2_name": dst_data.get("legal_name", dst_acc),
+            "account_2_anchor": dst_data.get("anchor_group", "Unknown"),
+            "account_2_status": dst_data.get("bri_status", "Unknown"),
+            "similarity": edge.get("similarity", 0),
+            "opportunity_score": min(opportunity_score, 100),
+            "anchor_pair": f"{src_data.get('anchor_group', 'Unknown')} ↔ {dst_data.get('anchor_group', 'Unknown')}"
+        })
+    
+    return pd.DataFrame(opportunities).sort_values("opportunity_score", ascending=False)
 
 
 def export_to_csv(df, filename="export.csv"):
@@ -793,6 +981,11 @@ def main():
         max_distance = st.slider("Similarity Threshold", min_value=0.5, max_value=4.0, value=2.0, step=0.25)
         
         st.markdown("---")
+        st.markdown("#### Cross-Anchor Analysis")
+        enable_cross_anchor = st.checkbox("Enable Cross-Anchor Relationship Detection", value=True)
+        highlight_cross_anchor = st.checkbox("Highlight Cross-Anchor Edges in Network", value=True)
+        
+        st.markdown("---")
         st.markdown("#### Clustering")
         clustering_method = st.selectbox("Algorithm", ["Louvain", "DBSCAN"])
         
@@ -825,13 +1018,21 @@ def main():
     df["opportunity_score"] = df["account_id"].map(lambda x: opportunity_scores.get(x, {}).get("total_score", 0))
     df["priority"] = df["account_id"].map(lambda x: opportunity_scores.get(x, {}).get("priority", "Low"))
     
+    # Calculate cross-anchor relationship metrics
+    if enable_cross_anchor and len(edges_df) > 0:
+        cross_anchor_metrics = calculate_cross_anchor_metrics(G, df, edges_df)
+        cross_anchor_opportunities = identify_cross_anchor_opportunities(df, edges_df, cross_anchor_metrics)
+    else:
+        cross_anchor_metrics = {}
+        cross_anchor_opportunities = pd.DataFrame()
+    
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Ecosystem Overview", "Account Details", "Anchor Analysis", 
         "RM Opportunities", "Cluster Analysis", "Data Export"
     ])
     
     with tab1:
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         with col1:
             st.metric("Total Accounts", len(df))
@@ -845,6 +1046,13 @@ def main():
         with col5:
             ntb_accounts = len(df[df["bri_status"] == "NTB"])
             st.metric("NTB Prospects", ntb_accounts)
+        with col6:
+            if cross_anchor_metrics and cross_anchor_metrics.get("cross_anchor_relationships", 0) > 0:
+                cross_anchor_count = cross_anchor_metrics.get("cross_anchor_relationships", 0)
+                st.metric("Cross-Anchor Links", cross_anchor_count, 
+                         delta=f"{cross_anchor_metrics.get('cross_anchor_ratio', 0):.1%}")
+            else:
+                st.metric("Cross-Anchor Links", 0)
         
         st.markdown("---")
         
@@ -862,7 +1070,7 @@ def main():
                 "Community": "community"
             }[color_option]
             
-            fig = create_network_visualization(G, df, community_map, color_by=color_by)
+            fig = create_network_visualization(G, df, community_map, color_by=color_by, highlight_cross_anchor=highlight_cross_anchor)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
@@ -997,11 +1205,19 @@ def main():
             neighbors_df = get_account_neighbors(G, selected_account, df)
             
             if len(neighbors_df) > 0:
-                display_df = neighbors_df[[
+                # Include cross-anchor info if available
+                display_cols = [
                     "account_id", "legal_name", "ecosystem_role", "anchor_group",
                     "bri_status", "similarity", "lead_score_bri"
-                ]].copy()
-                display_df.columns = ["Account", "Legal Name", "Role", "Anchor", "BRI Status", "Similarity", "Lead Score"]
+                ]
+                if "is_cross_anchor" in neighbors_df.columns:
+                    display_cols.append("anchor_relationship")
+                
+                display_df = neighbors_df[display_cols].copy()
+                col_names = ["Account", "Legal Name", "Role", "Anchor", "BRI Status", "Similarity", "Lead Score"]
+                if "anchor_relationship" in display_df.columns:
+                    col_names.append("Anchor Relationship")
+                display_df.columns = col_names
                 display_df["Similarity"] = display_df["Similarity"].round(3)
                 display_df["Legal Name"] = display_df["Legal Name"].str[:35]
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
@@ -1019,8 +1235,26 @@ def main():
             
             st.markdown("---")
             st.markdown("#### Account in Network")
-            fig_selected = create_network_visualization(G, df, community_map, selected_account, color_by="ecosystem_role")
+            fig_selected = create_network_visualization(G, df, community_map, selected_account, color_by="ecosystem_role", highlight_cross_anchor=highlight_cross_anchor)
             st.plotly_chart(fig_selected, use_container_width=True)
+            
+            # Show cross-anchor relationship summary
+            if len(neighbors_df) > 0 and "is_cross_anchor" in neighbors_df.columns:
+                cross_anchor_count = neighbors_df["is_cross_anchor"].sum()
+                if cross_anchor_count > 0:
+                    st.markdown("---")
+                    st.markdown("#### Cross-Anchor Relationships")
+                    st.info(f"This account has **{cross_anchor_count}** cross-anchor relationship(s), connecting to accounts from different anchor groups.")
+                    
+                    cross_anchor_neighbors = neighbors_df[neighbors_df["is_cross_anchor"] == True].copy()
+                    if len(cross_anchor_neighbors) > 0:
+                        cross_anchor_display = cross_anchor_neighbors[[
+                            "account_id", "legal_name", "anchor_group", "anchor_relationship", "similarity"
+                        ]].copy()
+                        cross_anchor_display.columns = ["Account", "Legal Name", "Anchor Group", "Relationship", "Similarity"]
+                        cross_anchor_display["Legal Name"] = cross_anchor_display["Legal Name"].str[:40]
+                        cross_anchor_display["Similarity"] = cross_anchor_display["Similarity"].round(3)
+                        st.dataframe(cross_anchor_display, use_container_width=True, hide_index=True)
     
     with tab3:
         st.markdown("#### Anchor Group Analysis")
@@ -1080,6 +1314,128 @@ def main():
         )
         fig_sunburst.update_layout(height=450)
         st.plotly_chart(fig_sunburst, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("#### Cross-Anchor Relationship Analysis")
+        
+        if cross_anchor_metrics and cross_anchor_metrics.get("total_relationships", 0) > 0:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Relationships", cross_anchor_metrics.get("total_relationships", 0))
+            with col2:
+                st.metric("Cross-Anchor Links", cross_anchor_metrics.get("cross_anchor_relationships", 0))
+            with col3:
+                cross_ratio = cross_anchor_metrics.get("cross_anchor_ratio", 0)
+                st.metric("Cross-Anchor Ratio", f"{cross_ratio:.1%}")
+            with col4:
+                bridge_count = len(cross_anchor_metrics.get("bridge_accounts", {}))
+                st.metric("Bridge Accounts", bridge_count)
+            
+            st.markdown("---")
+            
+            # Anchor Pair Connectivity
+            if cross_anchor_metrics.get("anchor_pairs"):
+                st.markdown("##### Anchor Pair Connectivity Matrix")
+                anchor_pairs_data = []
+                for pair_key, pair_data in cross_anchor_metrics["anchor_pairs"].items():
+                    anchor_pairs_data.append({
+                        "Anchor Pair": f"{pair_key[0]} ↔ {pair_key[1]}",
+                        "Relationships": pair_data["count"],
+                        "Avg Similarity": f"{pair_data['avg_similarity']:.3f}",
+                        "Strength": "Strong" if pair_data["avg_similarity"] > 0.5 else "Moderate" if pair_data["avg_similarity"] > 0.3 else "Weak"
+                    })
+                
+                if anchor_pairs_data:
+                    pairs_df = pd.DataFrame(anchor_pairs_data).sort_values("Relationships", ascending=False)
+                    st.dataframe(pairs_df, use_container_width=True, hide_index=True)
+                    
+                    # Visualization
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig_pairs = px.bar(
+                            pairs_df,
+                            x="Anchor Pair",
+                            y="Relationships",
+                            color="Avg Similarity",
+                            color_continuous_scale="Viridis",
+                            title="Cross-Anchor Relationship Count"
+                        )
+                        fig_pairs.update_layout(height=300, xaxis_tickangle=-45)
+                        st.plotly_chart(fig_pairs, use_container_width=True)
+                    
+                    with col2:
+                        fig_sim = px.scatter(
+                            pairs_df,
+                            x="Relationships",
+                            y="Avg Similarity",
+                            size="Relationships",
+                            color="Anchor Pair",
+                            hover_name="Anchor Pair",
+                            title="Relationship Strength vs Count"
+                        )
+                        fig_sim.update_layout(height=300)
+                        st.plotly_chart(fig_sim, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("##### Top Bridge Accounts (Cross-Anchor Connectors)")
+            
+            if cross_anchor_metrics.get("top_bridges"):
+                bridge_data = []
+                for acc_id, bridge_info in cross_anchor_metrics["top_bridges"]:
+                    acc_info = df[df["account_id"] == acc_id].iloc[0] if len(df[df["account_id"] == acc_id]) > 0 else None
+                    if acc_info is not None:
+                        bridge_data.append({
+                            "Account": acc_id,
+                            "Legal Name": acc_info.get("legal_name", acc_id)[:40],
+                            "Anchor": acc_info.get("anchor_group", "Unknown"),
+                            "Role": acc_info.get("ecosystem_role", "N/A"),
+                            "Bridge Score": f"{bridge_info['bridge_score']:.1f}",
+                            "Cross-Anchor Links": bridge_info["cross_anchor_connections"],
+                            "Connected Anchors": bridge_info["connected_anchors"],
+                            "Avg Similarity": f"{bridge_info['avg_similarity']:.3f}",
+                            "BRI Status": acc_info.get("bri_status", "Unknown")
+                        })
+                
+                if bridge_data:
+                    bridge_df = pd.DataFrame(bridge_data)
+                    st.dataframe(bridge_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No bridge accounts found. Try adjusting similarity threshold to find more cross-anchor relationships.")
+            
+            st.markdown("---")
+            st.markdown("##### Cross-Anchor Opportunities")
+            
+            if len(cross_anchor_opportunities) > 0:
+                st.markdown("**Top Cross-Anchor Relationship Opportunities**")
+                display_opps = cross_anchor_opportunities.head(20).copy()
+                display_opps = display_opps[[
+                    "account_1_name", "account_1_anchor", "account_1_status",
+                    "account_2_name", "account_2_anchor", "account_2_status",
+                    "similarity", "opportunity_score", "anchor_pair"
+                ]]
+                display_opps.columns = [
+                    "Account 1", "Anchor 1", "Status 1",
+                    "Account 2", "Anchor 2", "Status 2",
+                    "Similarity", "Opp Score", "Anchor Pair"
+                ]
+                display_opps["Account 1"] = display_opps["Account 1"].str[:35]
+                display_opps["Account 2"] = display_opps["Account 2"].str[:35]
+                display_opps["Similarity"] = display_opps["Similarity"].round(3)
+                st.dataframe(display_opps, use_container_width=True, hide_index=True)
+                
+                st.info("""
+                **Cross-Anchor Opportunities** represent relationships between accounts from different anchor groups. 
+                These are valuable for:
+                - **Market Expansion**: Understanding ecosystem connections across anchor boundaries
+                - **NTB Acquisition**: Identifying accounts that bridge different anchor ecosystems
+                - **Risk Management**: Detecting unusual cross-anchor transaction patterns
+                - **Strategic Partnerships**: Finding potential collaboration opportunities
+                """)
+            else:
+                st.warning("No cross-anchor opportunities found. This may indicate strong anchor group isolation or need to adjust similarity thresholds.")
+        else:
+            st.info("No cross-anchor relationships detected. This could mean accounts are primarily connected within their own anchor groups, or similarity thresholds need adjustment.")
     
     with tab4:
         st.markdown("#### RM Opportunity Pipeline")
