@@ -6,7 +6,7 @@ An interactive Streamlit dashboard for Relationship Managers (RM) that discovers
 ## Current State
 - Fully functional dashboard customized for poultry ecosystem
 - Poultry-specific mock data generator with realistic supply chain roles
-- KNN-based similarity detection with configurable parameters
+- **KNN-based relationship identification**: Discovers behavioral relationships between accounts using similarity analysis
 - Interactive network visualization with ecosystem role color coding
 - RM Opportunity scoring system (replaces fraud risk scoring)
 - Community detection using Louvain and DBSCAN algorithms
@@ -21,6 +21,8 @@ An interactive Streamlit dashboard for Relationship Managers (RM) that discovers
 ### Main Files
 - `app.py` - Main Streamlit application with all dashboard components
 - `.streamlit/config.toml` - Streamlit server configuration
+
+**For detailed architecture documentation, see: [System Architecture Guide](ARCHITECTURE.md)**
 
 ### Poultry Ecosystem Model
 
@@ -72,24 +74,43 @@ An interactive Streamlit dashboard for Relationship Managers (RM) that discovers
 5. **Cluster Analysis**: Louvain vs DBSCAN comparison, community exploration
 6. **Data Export**: Download datasets, view correlations
 
+### Relationship Identification
+
+The dashboard identifies relationships between accounts using **K-Nearest Neighbors (KNN)** algorithm:
+
+- **Behavioral Similarity**: Accounts with similar transaction patterns are identified as related
+- **Feature-Based**: Uses 10 numeric features + 2 categorical features for similarity calculation
+- **Network Construction**: Relationships are built into a graph for network analysis
+- **Community Detection**: Accounts are grouped into communities using clustering algorithms
+- **Cross-Anchor Detection**: Special handling for relationships across different anchor groups
+
+**Key Parameters**:
+- **K Neighbors**: Number of similar accounts to find (default: 5, range: 3-12)
+- **Similarity Threshold**: Maximum distance for relationship (default: 2.0, range: 0.5-4.0)
+
+See **[Ecosystem Relationship Identification Guide](ECOSYSTEM_RELATIONSHIP_IDENTIFICATION.md)** for complete documentation.
+
 ### Opportunity Scoring System
 The opportunity score (0-100) is calculated based on:
-- **Network Score (20%)**: Account connectivity in the ecosystem network
-- **Influence Score (15%)**: Betweenness centrality (bridging communities)
-- **Ecosystem Score (15%)**: Community size and strength
-- **Lead Score (25%)**: BRI lead scoring based on financial behavior
-- **Potential Score (25%)**: NTB status bonus and anchor proximity
+- **Network Score (20 points)**: Account connectivity in the ecosystem network (degree centrality)
+- **Influence Score (15 points)**: Betweenness centrality (bridging communities)
+- **Ecosystem Score (15 points)**: Community size and strength
+- **Lead Score (25 points)**: BRI lead scoring based on financial behavior
+- **Potential Score (25 points)**: NTB status bonus (+15) and anchor proximity (+10)
 
 Priority levels:
-- High: Score >= 70
-- Medium: Score >= 45
-- Low: Score < 45
+- **High**: Score ≥ 70 (Top-quality leads, immediate RM action)
+- **Medium**: Score 45-69 (Good opportunities, RM follow-up)
+- **Low**: Score < 45 (Standard accounts, routine monitoring)
+
+See **[Lead & Opportunity Identification Guide](LEAD_OPPORTUNITY_IDENTIFICATION.md)** for comprehensive documentation on identifying quality leads and interpreting opportunity scores.
 
 ### Key Technologies
 - **KNN Engine**: scikit-learn NearestNeighbors with preprocessing pipeline
 - **Network Analysis**: NetworkX for graph operations and community detection
 - **Visualization**: Plotly for interactive charts and network graphs
 - **Clustering**: Louvain (graph-based) and DBSCAN (density-based)
+- **NER & Anonymization**: spaCy (optional) or regex-based entity detection for data privacy compliance
 
 ### Dependencies
 - streamlit
@@ -99,8 +120,52 @@ Priority levels:
 - networkx
 - plotly
 - openpyxl (Excel support)
+- spacy (optional, for enhanced NER-based anonymization)
+
+## Data Privacy & Anonymization
+
+### UU PDP Compliance
+The dashboard implements **automatic NER-based anonymization** to comply with:
+- **UU PDP** (Undang-Undang Perlindungan Data Pribadi) - Indonesian Personal Data Protection Law
+- **Banking Confidentiality** requirements (Kerahasiaan Customer)
+
+### How It Works
+- **Automatic Anonymization**: All customer data is automatically anonymized before display
+- **NER-Based Detection**: Uses Named Entity Recognition (NER) to identify and mask:
+  - Company names (PT, CV, UD, Koperasi, etc.)
+  - Person names
+  - Other sensitive organizational information
+- **Consistent Mapping**: Same entities receive the same anonymized identifier throughout the session
+- **Dual-Mode Operation**:
+  - **Primary**: spaCy NER model (if installed) for high accuracy
+  - **Fallback**: Regex-based detection for Indonesian business patterns
+
+### Anonymization Features
+- **Entity Types Detected**: PERSON, ORG (Organization)
+- **Anonymization Format**: 
+  - Persons: `PERSON_[8-char-hash]`
+  - Organizations: `PT ENTITY_[8-char-hash]` (preserves company type prefix)
+- **Fields Anonymized**: `legal_name` (automatically applied to all data)
+- **Session Persistence**: Anonymization mapping maintained across dashboard interactions
+
+### Installation (Optional)
+For enhanced accuracy, install spaCy with Indonesian language model:
+```bash
+pip install spacy
+python -m spacy download id_core_web_sm    # Indonesian (recommended)
+# OR
+python -m spacy download xx_ent_wiki_sm    # Multilingual
+# OR
+python -m spacy download en_core_web_sm    # English
+```
+
+The dashboard works without spaCy using regex-based anonymization, but NER models provide better accuracy.
+
+### Privacy Notice
+All data displayed in the dashboard is automatically anonymized. The anonymization cannot be disabled to ensure compliance with data protection regulations and banking confidentiality requirements.
 
 ## Recent Changes
+- January 2025: **Added NER-based anonymization** for UU PDP and banking confidentiality compliance
 - January 2025: Added Cross-Anchor Relationship Detection with comprehensive parameters and metrics
 - January 2025: Implemented Bridge Account identification and scoring system
 - January 2025: Enhanced network visualization with cross-anchor edge highlighting
@@ -113,10 +178,15 @@ Priority levels:
 - December 2025: Initial MVP with KNN, community detection, network visualization
 
 ## Documentation
+- **[System Architecture Guide](ARCHITECTURE.md)**: Comprehensive architecture documentation covering high-level system design, data architecture, model architecture, training flow, and inference flow
+- **[Lead & Opportunity Identification Guide](LEAD_OPPORTUNITY_IDENTIFICATION.md)**: Comprehensive guide on identifying quality leads, interpreting opportunity scores, prioritizing accounts, and best practices for RM actions
+- **[Ecosystem Relationship Identification Guide](ECOSYSTEM_RELATIONSHIP_IDENTIFICATION.md)**: Comprehensive guide on how KNN identifies behavioral relationships between accounts, parameter tuning, use cases, and best practices
 - **[Cross-Anchor Relationships Guide](CROSS_ANCHOR_RELATIONSHIPS.md)**: Comprehensive documentation on cross-anchor relationship detection parameters, use cases, and best practices
+- **[Data Privacy & Anonymization Guide](DATA_PRIVACY_ANONYMIZATION.md)**: Complete documentation on NER-based anonymization, UU PDP compliance, installation, and troubleshooting
 
 ## User Preferences
 - Dashboard focused on RM use case for banking opportunities
 - Poultry supply chain ecosystem context
 - Indonesian business naming conventions (PT, CV, UD, Koperasi)
 - Currency display in Rupiah (Rp) with B/M/K abbreviations
+

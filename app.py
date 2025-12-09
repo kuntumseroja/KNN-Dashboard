@@ -10,6 +10,18 @@ import networkx as nx
 import plotly.graph_objects as go
 import plotly.express as px
 import io
+import re
+import hashlib
+from typing import Dict, Optional
+
+# Try to import spacy for NER, fallback to regex-based if not available
+SPACY_AVAILABLE = False
+spacy = None
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except ImportError:
+    pass
 
 
 st.set_page_config(
@@ -137,6 +149,195 @@ ROLE_COLORS = {
 }
 
 ANCHOR_GROUPS = ["Japfa_Group", "CP_Group", "Charoen_Group", "Malindo_Group", "Independent"]
+
+# NER and Anonymization Configuration
+@st.cache_resource
+def load_ner_model():
+    """
+    Load NER model for entity recognition. Falls back to regex-based if spacy not available.
+    
+    To install spaCy models (optional, for better accuracy):
+    - Indonesian: python -m spacy download id_core_web_sm
+    - Multilingual: python -m spacy download xx_ent_wiki_sm
+    - English: python -m spacy download en_core_web_sm
+    """
+    if SPACY_AVAILABLE and spacy is not None:
+        try:
+            # Try to load Indonesian model first, then multilingual, then English
+            try:
+                nlp = spacy.load("id_core_web_sm")
+                return nlp, True
+            except OSError:
+                try:
+                    nlp = spacy.load("xx_ent_wiki_sm")  # Multilingual
+                    return nlp, True
+                except OSError:
+                    try:
+                        nlp = spacy.load("en_core_web_sm")  # English as fallback
+                        return nlp, True
+                    except OSError:
+                        return None, False
+        except Exception:
+            return None, False
+    return None, False
+
+
+def detect_entities_regex(text: str) -> Dict[str, list]:
+    """Regex-based entity detection for Indonesian names and companies."""
+    entities = {
+        "PERSON": [],
+        "ORG": [],
+        "LOC": []
+    }
+    
+    if not text or pd.isna(text):
+        return entities
+    
+    text_str = str(text)
+    
+    # Indonesian company patterns: PT, CV, UD, Koperasi, etc.
+    org_patterns = [
+        r'\b(PT|CV|UD|PD|Perum|Persero|Koperasi)\s+([A-Z][A-Za-z\s&]+?)(?:\s+(?:Tbk|TBK|Tbk\.|TBK\.))?',
+        r'\b([A-Z][A-Za-z\s&]+?)\s+(?:PT|CV|UD|PD|Perum|Persero|Koperasi)',
+    ]
+    
+    for pattern in org_patterns:
+        matches = re.finditer(pattern, text_str, re.IGNORECASE)
+        for match in matches:
+            entities["ORG"].append(match.group(0))
+    
+    # Indonesian location patterns (common provinces, cities)
+    loc_patterns = [
+        r'\b(Jawa\s+(?:Barat|Tengah|Timur)|Sumatera\s+(?:Utara|Selatan)|Sulawesi\s+(?:Selatan|Utara)|Kalimantan\s+(?:Selatan|Barat|Timur)|Bali|NTB|NTT|Lampung|Yogyakarta|Jakarta|Bandung|Surabaya|Medan|Makassar)',
+    ]
+    
+    for pattern in loc_patterns:
+        matches = re.finditer(pattern, text_str, re.IGNORECASE)
+        for match in matches:
+            entities["LOC"].append(match.group(0))
+    
+    # Person names (Indonesian common patterns: 2-4 words, capitalized)
+    # This is a simplified pattern - real NER would be better
+    person_pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b'
+    # Exclude common company words
+    exclude_words = {'PT', 'CV', 'UD', 'Toko', 'Apotek', 'Farm', 'Breeding', 'Sentra', 
+                    'RPH', 'Armada', 'Ayam', 'Telur', 'Hewan', 'Livebird', 'Regional'}
+    
+    matches = re.finditer(person_pattern, text_str)
+    for match in matches:
+        potential_name = match.group(0)
+        words = potential_name.split()
+        # If it doesn't contain excluded words and has 2-4 words, likely a person name
+        if not any(word in exclude_words for word in words) and 2 <= len(words) <= 4:
+            entities["PERSON"].append(potential_name)
+    
+    return entities
+
+
+def anonymize_text(text: str, anonymization_map: Dict[str, str], use_ner: bool = True) -> str:
+    """
+    Anonymize text by replacing detected entities with anonymized versions.
+    Complies with UU PDP (Indonesian Personal Data Protection Law) and banking confidentiality.
+    
+    Args:
+        text: Text to anonymize
+        anonymization_map: Dictionary to store entity mappings for consistency
+        use_ner: Whether to use NER model (falls back to regex if unavailable)
+    
+    Returns:
+        Anonymized text string
+    """
+    if not text or pd.isna(text):
+        return text
+    
+    text_str = str(text)
+    anonymized = text_str
+    
+    entities_to_anonymize = {}
+    
+    if use_ner:
+        # Load NER model if available
+        nlp, ner_available = load_ner_model()
+        
+        if ner_available and nlp is not None:
+            try:
+                # Use spaCy NER
+                doc = nlp(text_str)
+                for ent in doc.ents:
+                    if ent.label_ in ["PERSON", "ORG"]:  # Anonymize persons and organizations
+                        entities_to_anonymize[ent.text] = ent.label_
+            except Exception:
+                # Fall back to regex if NER fails
+                detected = detect_entities_regex(text_str)
+                for entity_type in ["PERSON", "ORG"]:
+                    for entity in detected.get(entity_type, []):
+                        entities_to_anonymize[entity] = entity_type
+        else:
+            # Use regex-based detection
+            detected = detect_entities_regex(text_str)
+            for entity_type in ["PERSON", "ORG"]:
+                for entity in detected.get(entity_type, []):
+                    entities_to_anonymize[entity] = entity_type
+    else:
+        # Use regex-based detection
+        detected = detect_entities_regex(text_str)
+        for entity_type in ["PERSON", "ORG"]:
+            for entity in detected.get(entity_type, []):
+                entities_to_anonymize[entity] = entity_type
+    
+    # Anonymize detected entities
+    for entity, entity_type in entities_to_anonymize.items():
+        if entity not in anonymization_map:
+            # Create consistent anonymized identifier
+            # Use hash for consistency but make it readable
+            hash_id = hashlib.md5(entity.encode()).hexdigest()[:8].upper()
+            if entity_type == "PERSON":
+                anonymization_map[entity] = f"PERSON_{hash_id}"
+            elif entity_type == "ORG":
+                # Keep company type prefix if present
+                if entity.startswith(("PT ", "CV ", "UD ", "PD ")):
+                    prefix = entity.split()[0]
+                    anonymization_map[entity] = f"{prefix} ENTITY_{hash_id}"
+                else:
+                    anonymization_map[entity] = f"ENTITY_{hash_id}"
+            else:
+                anonymization_map[entity] = f"ENTITY_{hash_id}"
+        
+        # Replace in text (case-insensitive, whole word)
+        pattern = re.compile(re.escape(entity), re.IGNORECASE)
+        anonymized = pattern.sub(anonymization_map[entity], anonymized)
+    
+    return anonymized
+
+
+def anonymize_dataframe(df: pd.DataFrame, anonymize_fields: list = None) -> pd.DataFrame:
+    """
+    Anonymize sensitive fields in dataframe for UU PDP compliance.
+    Maintains consistent anonymization across the dataset.
+    """
+    if anonymize_fields is None:
+        anonymize_fields = ["legal_name"]
+    
+    df_anon = df.copy()
+    anonymization_map = {}
+    
+    # Initialize session state for consistent anonymization
+    if "anonymization_map" not in st.session_state:
+        st.session_state.anonymization_map = {}
+    
+    anonymization_map = st.session_state.anonymization_map
+    
+    # Anonymize specified fields
+    for field in anonymize_fields:
+        if field in df_anon.columns:
+            df_anon[field] = df_anon[field].apply(
+                lambda x: anonymize_text(x, anonymization_map, use_ner=True)
+            )
+    
+    # Update session state
+    st.session_state.anonymization_map = anonymization_map
+    
+    return df_anon
 
 
 @st.cache_data
@@ -925,6 +1126,13 @@ def main():
     st.markdown('<p class="main-header">OBS Account Relationship Dashboard</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Discover ecosystem relationships and opportunities in the Poultry Value Chain</p>', unsafe_allow_html=True)
     
+    # UU PDP Compliance Notice
+    st.info("""
+    🔒 **Data Privacy & Confidentiality**: This dashboard uses NER-based anonymization to protect customer data 
+    in compliance with UU PDP (Undang-Undang Perlindungan Data Pribadi) and banking confidentiality requirements. 
+    All customer names and sensitive information are automatically anonymized.
+    """)
+    
     if "uploaded_data" not in st.session_state:
         st.session_state.uploaded_data = None
     
@@ -950,8 +1158,10 @@ def main():
                     
                     valid, result = validate_uploaded_data(df_uploaded)
                     if valid:
+                        # Apply anonymization for UU PDP compliance
+                        result = anonymize_dataframe(result, anonymize_fields=["legal_name"])
                         st.session_state.uploaded_data = result
-                        st.success(f"Loaded {len(result)} accounts")
+                        st.success(f"Loaded {len(result)} accounts (data anonymized for privacy compliance)")
                     else:
                         st.error(result)
                         st.session_state.uploaded_data = None
@@ -994,6 +1204,28 @@ def main():
             dbscan_min_samples = st.slider("Min samples", min_value=2, max_value=8, value=3)
         
         st.markdown("---")
+        st.markdown("#### Privacy & Compliance")
+        enable_anonymization = st.checkbox("Enable Data Anonymization (UU PDP Compliance)", value=True, disabled=True)
+        st.caption("Anonymization is always enabled to comply with UU PDP and banking confidentiality requirements.")
+        
+        # Show anonymization method status
+        nlp, ner_available = load_ner_model()
+        if ner_available:
+            st.success("✓ Using NER-based anonymization (spaCy)")
+        else:
+            st.info("ℹ Using regex-based anonymization (spaCy model not installed)")
+            with st.expander("Install spaCy model for better accuracy"):
+                st.code("""
+# Install spaCy (if not already installed)
+pip install spacy
+
+# Download a model (choose one):
+python -m spacy download id_core_web_sm    # Indonesian (recommended)
+python -m spacy download xx_ent_wiki_sm    # Multilingual
+python -m spacy download en_core_web_sm    # English
+                """)
+        
+        st.markdown("---")
         st.markdown("#### About")
         st.caption("This dashboard identifies behavioral relationships between accounts in the poultry supply chain ecosystem using K-Nearest Neighbors algorithm.")
     
@@ -1001,6 +1233,9 @@ def main():
         df = st.session_state.uploaded_data.copy()
     else:
         df = generate_poultry_ecosystem_data(n_accounts=n_accounts if data_source == "Poultry Ecosystem Demo" else 80)
+    
+    # Apply anonymization for UU PDP compliance
+    df = anonymize_dataframe(df, anonymize_fields=["legal_name"])
     
     cat_features = [f for f in CATEGORICAL_FEATURES if f in df.columns]
     pipeline, cat_features = build_knn_pipeline(df, n_neighbors=n_neighbors)

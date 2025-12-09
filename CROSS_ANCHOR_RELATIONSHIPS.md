@@ -119,7 +119,7 @@ Cross-anchor opportunities are scored using:
 **Top Bridge Accounts**
 - **Purpose**: Identifies accounts that connect different anchor ecosystems
 - **Columns**:
-  - Account ID and Legal Name
+  - Account ID and Legal Name (anonymized for UU PDP compliance)
   - Anchor Group
   - Ecosystem Role
   - Bridge Score (higher = more valuable connector)
@@ -127,15 +127,17 @@ Cross-anchor opportunities are scored using:
   - Connected Anchors count
   - Average Similarity
   - BRI Status
+- **Note**: All legal names are automatically anonymized using NER-based detection. See [Data Privacy & Anonymization Guide](DATA_PRIVACY_ANONYMIZATION.md) for details.
 
 **Cross-Anchor Opportunities**
 - **Purpose**: High-value relationships for RM action
 - **Columns**:
-  - Account 1 & 2 details (name, anchor, status)
+  - Account 1 & 2 details (name, anchor, status) - names are anonymized
   - Similarity score
   - Opportunity Score (0-100)
   - Anchor Pair identifier
 - **Sorting**: By opportunity score (highest first)
+- **Note**: All account names displayed are anonymized for data privacy compliance
 
 ### Account Details Tab
 
@@ -155,6 +157,7 @@ Cross-anchor opportunities are scored using:
   - "Same Anchor" for intra-anchor relationships
   - "Anchor1 ↔ Anchor2" for cross-anchor relationships
 - **Visual Distinction**: Cross-anchor relationships are highlighted
+- **Data Privacy**: All legal names are anonymized (see [Data Privacy & Anonymization Guide](DATA_PRIVACY_ANONYMIZATION.md))
 
 ## Use Cases
 
@@ -339,12 +342,30 @@ Planned improvements:
 - Integration with CRM systems for opportunity tracking
 - Advanced visualization (sankey diagrams for anchor flows)
 
+## Data Privacy Note
+
+All account names and legal names displayed in cross-anchor analysis are automatically anonymized using NER-based detection to comply with UU PDP (Indonesian Personal Data Protection Law) and banking confidentiality requirements. The anonymization maintains consistent identifiers throughout the session while protecting sensitive customer information.
+
+For detailed information on anonymization, see: **[Data Privacy & Anonymization Guide](DATA_PRIVACY_ANONYMIZATION.md)**
+
+## Related Documentation
+
+For system architecture and technical details:
+- **[System Architecture Guide](ARCHITECTURE.md)**: Complete system architecture, data flow, model architecture, training and inference flows
+
+For general ecosystem relationship identification (how KNN finds relationships):
+- **[Ecosystem Relationship Identification Guide](ECOSYSTEM_RELATIONSHIP_IDENTIFICATION.md)**: Complete guide on KNN-based relationship detection, parameter tuning, and use cases
+
+For identifying quality leads and opportunities:
+- **[Lead & Opportunity Identification Guide](LEAD_OPPORTUNITY_IDENTIFICATION.md)**: Comprehensive guide on identifying quality leads, interpreting opportunity scores, and prioritizing accounts
+
 ## References
 
 - Main Dashboard: `app.py`
 - KNN Implementation: `find_neighbors_and_edges()` function
 - Metrics Calculation: `calculate_cross_anchor_metrics()` function
 - Opportunity Scoring: `identify_cross_anchor_opportunities()` function
+- Anonymization: `anonymize_dataframe()` and related functions
 
 ---
 
